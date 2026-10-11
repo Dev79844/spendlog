@@ -1,0 +1,21 @@
+﻿id,date,amount,category,category_color,category_icon,location,description,metadata,created_at,updated_at,record_type,category_active
+6,2024-02-29,60,Pets 🐶,#ABCDEF,dog,,leap,,2024-02-29T10:00:00.000Z,2024-02-29T10:00:00.000Z,expense,
+11,2024-12-31,1234567.89,"Old, ""retired""",,,,"  spaced  ",,2024-12-31T23:59:59.999Z,2025-01-02T00:00:00.000Z,expense,
+8,2025-01-01,10,Entertainment,#DDA0DD,movie,,sqlite-default,,2025-01-01T04:05:06.000Z,2025-01-01T04:05:06.000Z,expense,
+7,2025-02-10,33,Food & Dining,#123456,pizza,,edited,,2025-02-11T09:00:00.000Z,2025-02-12T09:00:00.000Z,expense,
+5,2025-03-09,75,Shopping,#45B7D1,cart,,dst,,2025-03-09T10:00:00.000Z,2025-03-09T10:00:00.000Z,expense,
+1,2025-03-15,250,Food & Dining,#123456,pizza,"Café ""Zoë"", MG Road","line one
+line two",,2025-03-15T08:30:00.000Z,2025-03-15T08:30:00.000Z,expense,
+2,2025-03-15,120,Food & Dining,#123456,pizza,,shifted,,2025-03-15T18:50:00.000Z,2025-03-15T18:50:00.000Z,expense,
+3,2025-03-31,999.5,Transportation,#4ECDC4,car,,shifted-month,"{""tags"":[""a,b""]}",2025-03-31T18:40:00.000Z,2025-03-31T18:40:00.000Z,expense,
+4,2025-04-01,0.30000000000000004,Transportation,#4ECDC4,car,,,,2025-04-01T00:15:00.000Z,2025-04-01T00:15:00.000Z,expense,
+,,,Food & Dining,#123456,pizza,,,,2025-01-01T03:00:00.000Z,,category,1
+,,,Transportation,#4ECDC4,car,,,,2025-01-01T03:00:00.000Z,,category,1
+,,,Shopping,#45B7D1,cart,,,,2025-01-01T03:00:00.000Z,,category,1
+,,,Bills & Utilities,#96CEB4,file-document,,,,2025-01-01T03:00:00.000Z,,category,1
+,,,Entertainment,#DDA0DD,movie,,,,2025-01-01T03:00:00.000Z,,category,0
+,,,Healthcare,#98D8C8,medical-bag,,,,2025-01-01T03:00:00.000Z,,category,1
+,,,Education,#F7DC6F,school,,,,2025-01-01T03:00:00.000Z,,category,1
+,,,Others,#BDC3C7,dots-horizontal,,,,2025-01-01T03:00:00.000Z,,category,1
+,,,Pets 🐶,#ABCDEF,dog,,,,2025-02-01T18:45:12.000Z,,category,1
+,,,"Old, ""retired""",,,,,,2025-02-02T00:00:00.000Z,,category,0

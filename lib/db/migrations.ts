@@ -6,8 +6,10 @@
 // own transaction together with the user_version bump, so it either fully
 // applies or leaves the database untouched.
 //
-// This file must stay free of runtime imports (React Native or otherwise) so
-// that scripts/verify-migrations.ts can run it under plain Node.
+// This file may only import pure modules (lib/date.ts), never React Native or
+// expo, so that scripts/verify-migrations.mjs can run it under plain Node.
+
+import { parseExpenseDay, parseTimestamp } from '../date';
 
 type SQLValue = string | number | null;
 
@@ -104,36 +106,25 @@ export function runMigrations(
 
 // ---------------------------------------------------------------------------
 // Legacy value parsing (used by migration 1)
+//
+// Both delegate to the parsers in lib/date.ts that CSV import also uses, so
+// a migrated row and an imported row end up identical.
 
 // Old expense dates were 'YYYY-MM-DD'. They are read as a local calendar day
-// and stored as local noon, the same convention as new entries (lib/date.ts).
+// and stored as local noon, the same convention as new entries.
 export function legacyDayToEpoch(value: unknown): number {
-  const match = typeof value === 'string' ? /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim()) : null;
-  if (!match) throw new Error(`Unrecognised expense date: ${JSON.stringify(value)}`);
-  const [year, month, day] = [Number(match[1]), Number(match[2]), Number(match[3])];
-  const date = new Date(year, month - 1, day, 12);
-  if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) {
-    throw new Error(`Invalid expense date: ${JSON.stringify(value)}`);
-  }
-  return date.getTime();
+  const ms = typeof value === 'string' ? parseExpenseDay(value) : null;
+  if (ms === null) throw new Error(`Unrecognised expense date: ${JSON.stringify(value)}`);
+  return ms;
 }
 
-// Old timestamps came from two writers:
-// - SQLite's CURRENT_TIMESTAMP default: 'YYYY-MM-DD HH:MM:SS', UTC, no zone.
+// Old timestamps came from two writers, both UTC:
+// - SQLite's CURRENT_TIMESTAMP default: 'YYYY-MM-DD HH:MM:SS', no zone, read as UTC.
 // - JS `new Date().toISOString()`: 'YYYY-MM-DDTHH:MM:SS.sssZ'.
-// Both are UTC. A value without a zone is read as UTC (never local), because
-// that is what SQLite meant by it. Returns null when it cannot be parsed.
+// Returns null when the value cannot be parsed.
 export function legacyTimestampToEpoch(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
-  if (typeof value !== 'string') return null;
-  const match =
-    /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?)(Z|[+-]\d{2}:?\d{2})?$/i.exec(
-      value.trim()
-    );
-  if (!match) return null;
-  const zone = match[3] ? match[3].toUpperCase() : 'Z';
-  const ms = Date.parse(`${match[1]}T${match[2]}${zone}`);
-  return Number.isNaN(ms) ? null : ms;
+  return typeof value === 'string' ? parseTimestamp(value) : null;
 }
 
 // ---------------------------------------------------------------------------

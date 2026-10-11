@@ -10,6 +10,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, existsSync } from 'node:fs';
+import { registerHooks } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -27,6 +28,18 @@ if (!process.env.VERIFY_MIGRATIONS_CHILD) {
   }
   process.exit(failed ? 1 : 0);
 }
+
+// The app's imports are extensionless ('../date'); let Node find the .ts file.
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    try {
+      return nextResolve(specifier, context);
+    } catch (error) {
+      if (specifier.startsWith('.')) return nextResolve(`${specifier}.ts`, context);
+      throw error;
+    }
+  },
+});
 
 const { runMigrations, getUserVersion, MIGRATIONS, legacyTimestampToEpoch } = await import(
   '../lib/db/migrations.ts'

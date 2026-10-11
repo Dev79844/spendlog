@@ -1,10 +1,11 @@
 // Tests for CSV export/import. Runs under plain Node (no device):
 //   npm test            (runs this file under TZ=UTC, Asia/Kolkata, America/New_York)
 // lib/csv.ts and lib/db/csv.ts are loaded through Node's TypeScript type
-// stripping; the database side runs against node:sqlite with the same schema
-// as lib/db/index.ts.
+// stripping; the database side runs against node:sqlite with the schema built
+// by the real migrations (lib/db/migrations.ts), as initDatabase() does.
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { registerHooks } from 'node:module';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
@@ -24,41 +25,30 @@ registerHooks({
 const csv = await import('../lib/csv.ts');
 const dbCsv = await import('../lib/db/csv.ts');
 const { DEFAULT_CATEGORIES } = await import('../lib/types.ts');
+const { runMigrations } = await import('../lib/db/migrations.ts');
+const { parseExpenseDay, parseTimestamp } = await import('../lib/date.ts');
+const { PRE_MIGRATION_SQL } = await import('./fixtures/pre-migration-db.mjs');
+const PRE_MIGRATION_EXPORT = readFileSync(new URL('./fixtures/pre-migration-export.csv', import.meta.url), 'utf8');
 
-// Mirrors initDatabase() in lib/db/index.ts.
-const SCHEMA_SQL = `
-  CREATE TABLE IF NOT EXISTS categories (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL UNIQUE,
-    color TEXT,
-    icon TEXT,
-    is_active INTEGER DEFAULT 1,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP
-  );
-  CREATE TABLE IF NOT EXISTS expenses (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    amount REAL NOT NULL,
-    date TEXT NOT NULL,
-    category_id INTEGER NOT NULL,
-    location TEXT,
-    description TEXT,
-    metadata TEXT,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (category_id) REFERENCES categories(id)
-  );
-  CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(date);
-  CREATE INDEX IF NOT EXISTS idx_expenses_category ON expenses(category_id);
-`;
-
-/** A fresh install: schema plus the seeded default categories. */
+/** A fresh install, as initDatabase() makes it: migrations, then the seeded default categories. */
 function freshDb() {
-  const raw = new DatabaseSync(':memory:');
-  raw.exec(SCHEMA_SQL);
+  const db = adapt(new DatabaseSync(':memory:'));
+  runMigrations(db);
+  const now = Date.now();
   for (const c of DEFAULT_CATEGORIES) {
-    raw.prepare('INSERT INTO categories (name, color, icon) VALUES (?, ?, ?)').run(c.name, c.color ?? null, c.icon ?? null);
+    db.runSync('INSERT INTO categories (name, color, icon, created_at) VALUES (?, ?, ?, ?)', [
+      c.name, c.color ?? null, c.icon ?? null, now,
+    ]);
   }
-  return adapt(raw);
+  return db;
+}
+
+/** An existing install from before the epoch migration, upgraded by it. */
+function migratedPreMigrationDb() {
+  const db = adapt(new DatabaseSync(':memory:'));
+  db.raw.exec(PRE_MIGRATION_SQL);
+  runMigrations(db);
+  return db;
 }
 
 /** node:sqlite with the subset of expo-sqlite's sync API that lib/db/csv.ts uses. */
@@ -66,6 +56,7 @@ function adapt(raw) {
   const plain = (row) => (row ? { ...row } : row);
   return {
     raw,
+    execSync: (sql) => raw.exec(sql),
     getAllSync: (sql, params) => raw.prepare(sql).all(...params).map(plain),
     getFirstSync: (sql, params) => plain(raw.prepare(sql).get(...params)) ?? null,
     runSync: (sql, params) => raw.prepare(sql).run(...params),
@@ -82,13 +73,15 @@ function adapt(raw) {
   };
 }
 
+/** Adds an expense the way the app stores it; dates and timestamps are given as text. */
 function addExpense(db, e) {
   const cat = db.getFirstSync('SELECT id FROM categories WHERE name = ?', [e.category]);
   db.runSync(
     `INSERT INTO expenses (amount, date, category_id, location, description, metadata, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    [e.amount, e.date, cat.id, e.location ?? null, e.description ?? null, e.metadata ?? null,
-      e.created_at ?? '2025-01-01T10:00:00.000Z', e.updated_at ?? '2025-01-01T10:00:00.000Z']
+    [e.amount, parseExpenseDay(e.date), cat.id, e.location ?? null, e.description ?? null, e.metadata ?? null,
+      parseTimestamp(e.created_at ?? '2025-01-01T10:00:00.000Z'),
+      parseTimestamp(e.updated_at ?? '2025-01-01T10:00:00.000Z')]
   );
 }
 
@@ -248,8 +241,8 @@ test('missing required columns block the file', () => {
 function sourceDb() {
   const db = freshDb();
   db.runSync("UPDATE categories SET color = '#123456', icon = 'pizza' WHERE name = 'Food & Dining'", []);
-  db.runSync("INSERT INTO categories (name, color, icon) VALUES ('Pets 🐶', '#ABCDEF', 'dog')", []);
-  db.runSync("INSERT INTO categories (name, color, icon, is_active) VALUES ('Old, \"retired\"', NULL, NULL, 0)", []);
+  db.runSync("INSERT INTO categories (name, color, icon, created_at) VALUES ('Pets 🐶', '#ABCDEF', 'dog', 1)", []);
+  db.runSync("INSERT INTO categories (name, color, icon, is_active, created_at) VALUES ('Old, \"retired\"', NULL, NULL, 0, 1)", []);
   addExpense(db, { amount: 12.5, date: '2025-01-03', category: 'Food & Dining', location: 'Café "Zoë", MG Road', description: 'line one\nline two' });
   addExpense(db, { amount: 0.1 + 0.2, date: '2025-01-03', category: 'Food & Dining' });
   addExpense(db, { amount: 0.1 + 0.2, date: '2025-01-03', category: 'Food & Dining' }); // a genuine repeat
@@ -330,14 +323,19 @@ test('lenient dates and timestamps import as the current schema stores them', ()
     '2026/05/27,12,Food & Dining,,',
   ].join('\n'));
   const rows = expensesOf(db);
-  const day = byZone(['2026-05-26', '2026-05-27', '2026-05-26']);
-  assert.deepEqual(rows.map((r) => r.date), [day, day, '2026-05-27']);
-  assert.equal(rows[0].created_at, '2026-05-26T20:00:00.000Z');
-  assert.equal(rows[1].created_at, '2026-05-26T20:00:00.000Z');
-  assert.equal(rows[1].updated_at, new Date(2026, 4, 27, 9, 57).toISOString());
+  // Dates are local noon of the calendar day, timestamps epoch ms.
+  const noon = (day) => {
+    const [y, m, d] = day.split('-').map(Number);
+    return new Date(y, m - 1, d, 12).getTime();
+  };
+  const day = noon(byZone(['2026-05-26', '2026-05-27', '2026-05-26']));
+  assert.deepEqual(rows.map((r) => r.date), [day, day, noon('2026-05-27')]);
+  assert.equal(rows[0].created_at, Date.UTC(2026, 4, 26, 20));
+  assert.equal(rows[1].created_at, Date.UTC(2026, 4, 26, 20));
+  assert.equal(rows[1].updated_at, new Date(2026, 4, 27, 9, 57).getTime());
   for (const value of [rows[0].updated_at, rows[2].created_at, rows[2].updated_at]) {
-    assert.match(value, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
-    assert.ok(Date.parse(value) >= before - 1000, `${value} defaults to now`);
+    assert.equal(typeof value, 'number');
+    assert.ok(value >= before - 1000 && value <= Date.now(), `${value} defaults to now`);
   }
 });
 
@@ -349,4 +347,66 @@ test('a failure part-way through rolls the whole import back', () => {
   assert.throws(() => dbCsv.applyCsvImport(db, plan), /Row 99/);
   assert.equal(expensesOf(db).length, 0);
   assert.equal(db.getFirstSync("SELECT COUNT(*) as n FROM categories WHERE name = 'Brand New'", []).n, 0);
+});
+
+// ---------------------------------------------------------------------------
+// Epoch storage: imported rows must be stored exactly like migrated rows.
+
+const rawExpenses = (db) =>
+  db.getAllSync(
+    `SELECT e.id, e.amount, e.date, e.location, e.description, e.metadata, e.created_at, e.updated_at,
+            c.name AS category
+     FROM expenses e JOIN categories c ON c.id = e.category_id ORDER BY e.id`,
+    []
+  );
+// Seeded default categories get created_at = install time in a fresh install
+// and import doesn't change it, so created_at is compared for the others only.
+const DEFAULT_NAMES = new Set(DEFAULT_CATEGORIES.map((c) => c.name));
+const rawCategories = (db) =>
+  db
+    .getAllSync('SELECT name, color, icon, is_active, created_at FROM categories ORDER BY name', [])
+    .map((c) => (DEFAULT_NAMES.has(c.name) ? { ...c, created_at: 'install time' } : c));
+
+test(`pre-migration export imported into a migrated DB = migrating that data (TZ=${TZ})`, () => {
+  const migrated = migratedPreMigrationDb();
+  const imported = freshDb();
+  const plan = importText(imported, PRE_MIGRATION_EXPORT);
+  assert.equal(plan.expenses.length, 9);
+
+  const expected = rawExpenses(migrated);
+  assert.equal(expected.length, 9);
+  assert.deepEqual(rawExpenses(imported), expected);
+  assert.deepEqual(rawCategories(imported), rawCategories(migrated));
+
+  // Not trivially equal: the values really are epoch ms.
+  const shifted = expected.find((e) => e.description === 'shifted');
+  assert.equal(shifted.date, new Date(2025, 2, 15, 12).getTime());
+  assert.equal(shifted.created_at, Date.UTC(2025, 2, 15, 18, 50));
+  assert.equal(expected.find((e) => e.description === 'sqlite-default').created_at, Date.UTC(2025, 0, 1, 4, 5, 6));
+  assert.equal(
+    migrated.getFirstSync("SELECT created_at FROM categories WHERE name = 'Pets 🐶'", []).created_at,
+    Date.UTC(2025, 1, 1, 18, 45, 12)
+  );
+});
+
+test(`export → import of a migrated DB reproduces identical epoch values (TZ=${TZ})`, () => {
+  const source = migratedPreMigrationDb();
+  // Plus rows written by the new app, including a non-whole-second timestamp.
+  addExpense(source, {
+    amount: 42, date: '2026-05-27', category: 'Pets 🐶', description: 'new app',
+    created_at: '2026-05-26T18:45:01.234Z', updated_at: '2026-05-26T18:45:01.234Z',
+  });
+  const exported = dbCsv.buildCsvExport(source);
+  // Export stays human-readable: local calendar days and ISO UTC timestamps.
+  assert.match(exported.csv, /\r\n2,2025-03-15,120,Food & Dining,.*,2025-03-15T18:50:00\.000Z,2025-03-15T18:50:00\.000Z,expense,\r\n/);
+
+  const target = freshDb();
+  importText(target, exported.csv);
+  assert.deepEqual(rawExpenses(target), rawExpenses(source));
+  assert.deepEqual(rawCategories(target), rawCategories(source));
+  // Re-exporting gives the same expense lines (category lines differ only in
+  // the seeded defaults' created_at, see rawCategories).
+  const expenseLines = (text) => text.split('\r\n').filter((line) => line.endsWith(',expense,'));
+  assert.equal(expenseLines(exported.csv).length, 10);
+  assert.deepEqual(expenseLines(dbCsv.buildCsvExport(target).csv), expenseLines(exported.csv));
 });
