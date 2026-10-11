@@ -10,7 +10,7 @@ Spendlog: an offline-first, single-user expense tracker for Android (primary) an
 | Dev build + run | `npm run android` / `npm run ios` (`expo run:*`, native build) |
 | Dev server only | `npm start` (needs a dev build already installed on the device) |
 | Web | `npm run web` (not a supported target: there is no metro config for `expo-sqlite`'s web build) |
-| Lint | `npm run lint` |
+| Lint | `npm run lint` (`expo lint` caches results; add `-- --no-cache` after changing ESLint or its plugins) |
 | Type-check | `npx tsc --noEmit` (no npm script) |
 | Tests | `npm test` (CSV export/import, plain Node + `node:sqlite`, no device) |
 
@@ -55,6 +55,7 @@ Expo template leftovers, unused by the real screens: `app/(tabs)/explore.tsx` (h
 - **UI**: Paper components (`Text` with `variant`, `Button`, `TextInput mode="outlined"`, `FAB`) and colors from `useTheme().colors`. Static layout in a `StyleSheet.create` at the file bottom; theme colors inline in the `style` array. Icons are `MaterialCommunityIcons` names (also stored in `categories.icon`).
 - **Theming**: the root layout picks the Paper and navigation themes from `settings-store.themeMode` (`light` / `dark` / `system`). New colors go in the Paper themes in `constants/theme.ts`, in both light and dark.
 - **Imports**: use the `@/` alias (repo root) from `app/` and `components/`; files inside `lib/` import each other relatively.
+- **Navigation imports**: since SDK 56, app code must not import `@react-navigation/*`. Use `expo-router` for routing, `expo-router/react-navigation` for themes and `PlatformPressable`, and `expo-router/js-tabs` for bottom-tab types.
 - **SQL**: parameterised `?` placeholders. Partial updates build `SET` clauses from the fields that are `!== undefined`, so passing `null` clears a column.
 - **Booleans**: SQLite has none. `is_active` is the number `0`/`1`, typed `number`; compare with `=== 1`.
 - **Dates**: `expenses.date` is `YYYY-MM-DD` (from `formatDate`), month keys are `YYYY-MM` (`getCurrentMonth`), and month filters match `date LIKE 'YYYY-MM%'`. `created_at` / `updated_at` are ISO timestamps.

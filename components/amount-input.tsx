@@ -19,6 +19,7 @@ export function AmountInput({ value, onChange, label = 'Amount', error }: Amount
     // Only update if the value changes externally and is different from current input
     const numericInput = parseFloat(inputValue) || 0;
     if (value !== numericInput && value > 0) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setInputValue(value.toString());
     }
   }, [value]);

@@ -34,6 +34,8 @@ export default function EditExpenseScreen() {
     if (id) {
       const expense = getExpenseById(parseInt(id));
       if (expense) {
+        // Prefill the form from the stored expense.
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setAmount(expense.amount);
         setDate(new Date(expense.date + 'T00:00:00'));
         setCategoryId(expense.category_id);
