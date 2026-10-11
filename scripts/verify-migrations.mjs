@@ -138,6 +138,11 @@ function seedLegacy(db) {
   db.runSync("INSERT INTO settings (key, value) VALUES ('currency', 'USD')");
 }
 
+// The upgrade checks below are about migration 1 alone; migration 2 (shifted
+// days) is covered by scripts/test-shifted-dates.mjs.
+const MIGRATION_1 = MIGRATIONS.filter((m) => m.version === 1);
+const LATEST = MIGRATIONS.at(-1).version;
+
 const localNoon = (y, m, d) => new Date(y, m - 1, d, 12).getTime();
 const tz = process.env.TZ;
 const dir = mkdtempSync(join(tmpdir(), 'spendlog-migrations-'));
@@ -156,15 +161,15 @@ try {
   const backupPath = join(dir, 'spendlog-backup.db');
   let backupCalls = 0;
 
-  const result = runMigrations(db, MIGRATIONS, {
+  const result = runMigrations(db, MIGRATION_1, {
     backup: () => {
       backupCalls++;
       db.runSync('VACUUM INTO ?', [backupPath]);
     },
   });
 
-  check('migrates from version 0 to latest', () => {
-    assert.deepEqual(result, { fromVersion: 0, toVersion: MIGRATIONS.at(-1).version });
+  check('migrates from version 0 to 1', () => {
+    assert.deepEqual(result, { fromVersion: 0, toVersion: 1 });
   });
 
   check('backup taken once, before changes, with the old data', () => {
@@ -269,13 +274,13 @@ try {
   check('idempotent: rerunning is a no-op, and so is replaying migration 1', () => {
     const snapshot = db.getAllSync('SELECT * FROM expenses ORDER BY id');
     let calls = 0;
-    assert.deepEqual(runMigrations(db, MIGRATIONS, { backup: () => calls++ }), {
+    assert.deepEqual(runMigrations(db, MIGRATION_1, { backup: () => calls++ }), {
       fromVersion: 1,
       toVersion: 1,
     });
     assert.equal(calls, 0);
     db.execSync('PRAGMA user_version = 0');
-    runMigrations(db);
+    runMigrations(db, MIGRATION_1);
     assert.deepEqual(db.getAllSync('SELECT * FROM expenses ORDER BY id'), snapshot);
     assert.equal(getUserVersion(db), 1);
   });
@@ -287,11 +292,11 @@ try {
     let calls = 0;
     runMigrations(fresh, MIGRATIONS, { backup: () => calls++ });
     assert.equal(calls, 0);
-    assert.equal(getUserVersion(fresh), 1);
+    assert.equal(getUserVersion(fresh), LATEST);
     const names = fresh
       .getAllSync("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
       .map((r) => r.name);
-    assert.deepEqual(names, ['categories', 'expenses', 'settings']);
+    assert.deepEqual(names, ['categories', 'date_review', 'expenses', 'settings']);
     fresh.raw.close();
   });
 

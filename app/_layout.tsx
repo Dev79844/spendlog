@@ -108,6 +108,10 @@ export default function RootLayout() {
               name="category/[id]"
               options={{ presentation: 'modal', title: 'Edit Category' }}
             />
+            <Stack.Screen
+              name="review-dates"
+              options={{ presentation: 'modal', title: 'Review Dates' }}
+            />
           </Stack>
           <StatusBar style={effectiveColorScheme === 'dark' ? 'light' : 'dark'} />
         </ThemeProvider>
