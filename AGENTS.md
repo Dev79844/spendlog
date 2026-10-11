@@ -2,8 +2,6 @@
 
 Spendlog: an offline-first, single-user expense tracker for Android (primary) and iOS. Expo + expo-router, SQLite through `expo-sqlite`, zustand stores, React Native Paper (Material 3) UI. No backend.
 
-The product spec (features, planned schema, screens) is `.cursorrules/spendlog-prd.md`. Read it before building a feature; much of it is not built yet (income, analytics, search/filter, export, backup). Where the PRD and the code disagree, the code is current.
-
 ## Commands
 
 | Task | Command |
