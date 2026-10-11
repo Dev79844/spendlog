@@ -8,9 +8,9 @@
 // `db` from './index') so scripts/test-insights.mjs can run them under Node
 // against node:sqlite. Only pure modules may be imported here.
 //
-// Series are named by what they sum (`expenses`). When income exists, add an
-// `income` sum next to it in the same queries (and `net = income - expenses`)
-// rather than adding a parallel module.
+// Series are named by what they sum: `expenses` (the expenses table) and
+// `income` (the incomes table), with `net = income - expenses` over the same
+// local ranges. Category breakdowns are of expenses only.
 
 import { getMonthDayRanges, getMonthRange, shiftMonth } from '../date';
 
@@ -52,6 +52,10 @@ export interface MonthInsights {
   month: string;
   expenses: number;
   expenseCount: number;
+  income: number;
+  incomeCount: number;
+  /** income - expenses; negative when more was spent than earned. */
+  net: number;
   previousMonth: string;
   previousExpenses: number;
   /** expenses - previousExpenses. */
@@ -69,6 +73,9 @@ export interface MonthInsights {
 export interface MonthTotal {
   month: string;
   expenses: number;
+  income: number;
+  /** income - expenses. */
+  net: number;
 }
 
 export interface CategoryTrend {
@@ -100,9 +107,9 @@ function rangesCte(name: string, ranges: { key: BindValue; start: number; end: n
   };
 }
 
-function sumBetween(db: InsightsDatabase, start: number, end: number) {
+function sumBetween(db: InsightsDatabase, table: 'expenses' | 'incomes', start: number, end: number) {
   const row = db.getFirstSync<{ total: number | null; count: number }>(
-    'SELECT SUM(amount) AS total, COUNT(*) AS count FROM expenses WHERE date >= ? AND date < ?',
+    `SELECT SUM(amount) AS total, COUNT(*) AS count FROM ${table} WHERE date >= ? AND date < ?`,
     [start, end]
   );
   return { total: row?.total ?? 0, count: row?.count ?? 0 };
@@ -189,8 +196,9 @@ export function getMonthInsights(
   const previousMonth = shiftMonth(month, -1);
   const prev = getMonthRange(previousMonth);
 
-  const current = sumBetween(db, start, end);
-  const previousExpenses = sumBetween(db, prev.start, prev.end).total;
+  const current = sumBetween(db, 'expenses', start, end);
+  const income = sumBetween(db, 'incomes', start, end);
+  const previousExpenses = sumBetween(db, 'expenses', prev.start, prev.end).total;
   const change = current.total - previousExpenses;
   const counted = daysCounted(month, now);
 
@@ -198,6 +206,9 @@ export function getMonthInsights(
     month,
     expenses: current.total,
     expenseCount: current.count,
+    income: income.total,
+    incomeCount: income.count,
+    net: income.total - current.total,
     previousMonth,
     previousExpenses,
     change,
@@ -223,15 +234,19 @@ export function getSpendingTrend(db: InsightsDatabase, lastMonth: string): Spend
     months.map((m) => ({ key: m, ...getMonthRange(m) }))
   );
 
-  const totals = db.getAllSync<MonthTotal>(
-    `WITH ${cte.sql}
-     SELECT m.label AS month, COALESCE(SUM(e.amount), 0) AS expenses
-     FROM months m
-     LEFT JOIN expenses e ON e.date >= m.lo AND e.date < m.hi
-     GROUP BY m.label
-     ORDER BY m.lo`,
-    cte.params
-  );
+  // Subqueries, not two joins: joining both tables would multiply the rows.
+  const totals = db
+    .getAllSync<Omit<MonthTotal, 'net'>>(
+      `WITH ${cte.sql}
+       SELECT
+         m.label AS month,
+         (SELECT COALESCE(SUM(e.amount), 0) FROM expenses e WHERE e.date >= m.lo AND e.date < m.hi) AS expenses,
+         (SELECT COALESCE(SUM(i.amount), 0) FROM incomes i WHERE i.date >= m.lo AND i.date < m.hi) AS income
+       FROM months m
+       ORDER BY m.lo`,
+      cte.params
+    )
+    .map((t) => ({ ...t, net: t.income - t.expenses }));
 
   const rows = db.getAllSync<{
     month: string;
