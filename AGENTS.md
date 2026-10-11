@@ -28,6 +28,8 @@ gh release download vX.Y.Z --pattern '*.apk' && adb install -r spendlog-X.Y.Z.ap
 
 A tag push runs the workflow file from the tagged commit. To rebuild an existing tag with the workflow from `main` (say, after a CI fix), use `gh workflow run android-release.yml --ref main -f tag=vX.Y.Z`; add `-f dry_run=true` to build and verify without publishing.
 
+Release notes list the PRs merged since the previous published release (highest versionCode below the tag), from GitHub's release-notes generator via `.github/scripts/release-pr-list.sh`, followed by the build info. If that fails, the release is still published with the build info only, and a warning. The workflow reads the script from its own commit, so a manual rebuild of an older tag still gets it. After changing it, run `.github/scripts/test-release-pr-list.sh` (stubbed `gh`, no network) and `actionlint`.
+
 The workflow fails unless the APK's signer is the template debug keystore (SHA-256 `FA:C6:17:…:91:03:3B:9C`), because the installed app is signed with it. Never uninstall the app on the phone to update it: it holds the only copy of the data.
 
 ## Layout
