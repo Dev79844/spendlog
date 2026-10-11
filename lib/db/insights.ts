@@ -210,13 +210,14 @@ export function getMonthInsights(
   };
 }
 
-/** Totals for the `count` months ending with `lastMonth`, oldest first, with per-category series. */
-export function getSpendingTrend(
-  db: InsightsDatabase,
-  lastMonth: string,
-  count: number
-): SpendingTrend {
-  const months = Array.from({ length: count }, (_, i) => shiftMonth(lastMonth, i - count + 1));
+/** Months covered by the trend view. */
+export const TREND_MONTHS = 12;
+
+/** Totals for the TREND_MONTHS months ending with `lastMonth`, oldest first, with per-category series. */
+export function getSpendingTrend(db: InsightsDatabase, lastMonth: string): SpendingTrend {
+  const months = Array.from({ length: TREND_MONTHS }, (_, i) =>
+    shiftMonth(lastMonth, i - TREND_MONTHS + 1)
+  );
   const cte = rangesCte(
     'months',
     months.map((m) => ({ key: m, ...getMonthRange(m) }))

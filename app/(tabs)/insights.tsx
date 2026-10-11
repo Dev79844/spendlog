@@ -6,7 +6,7 @@ import { IconButton, SegmentedButtons, Text, useTheme } from 'react-native-paper
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { InsightsMonthView } from '@/components/insights-month-view';
-import { InsightsTrendView, type TrendRange } from '@/components/insights-trend-view';
+import { InsightsTrendView } from '@/components/insights-trend-view';
 import { MonthPickerModal } from '@/components/month-picker-modal';
 import { getCurrentMonth, monthKeyToDate, shiftMonth } from '@/lib/date';
 import { db } from '@/lib/db';
@@ -26,7 +26,6 @@ export default function InsightsScreen() {
   const [view, setView] = useState<InsightsMode>('month');
   const [selectedMonth, setSelectedMonth] = useState(getCurrentMonth);
   const [monthPickerVisible, setMonthPickerVisible] = useState(false);
-  const [range, setRange] = useState<TrendRange>(6);
   const [monthInsights, setMonthInsights] = useState<MonthInsights | null>(null);
   const [trend, setTrend] = useState<SpendingTrend | null>(null);
 
@@ -36,9 +35,9 @@ export default function InsightsScreen() {
       if (view === 'month') {
         setMonthInsights(getMonthInsights(db, selectedMonth));
       } else {
-        setTrend(getSpendingTrend(db, getCurrentMonth(), range));
+        setTrend(getSpendingTrend(db, getCurrentMonth()));
       }
-    }, [view, selectedMonth, range])
+    }, [view, selectedMonth])
   );
 
   const isCurrentMonth = selectedMonth >= getCurrentMonth();
@@ -92,9 +91,7 @@ export default function InsightsScreen() {
             )}
           </>
         ) : (
-          trend?.months.length === range && (
-            <InsightsTrendView trend={trend} range={range} onRangeChange={setRange} />
-          )
+          trend && <InsightsTrendView trend={trend} />
         )}
       </ScrollView>
 

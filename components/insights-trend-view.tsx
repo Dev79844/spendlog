@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { BarChart } from 'react-native-gifted-charts';
-import { Chip, SegmentedButtons, Text, useTheme } from 'react-native-paper';
+import { Chip, Text, useTheme } from 'react-native-paper';
 
 import {
   CategoryShareRow,
@@ -12,9 +12,6 @@ import {
 import { monthKeyToDate } from '@/lib/date';
 import type { SpendingTrend } from '@/lib/db/insights';
 import { useSettingsStore } from '@/lib/stores/settings-store';
-
-export const TREND_RANGES = [6, 12] as const;
-export type TrendRange = (typeof TREND_RANGES)[number];
 
 const shortMonth = (month: string) => monthKeyToDate(month).toLocaleDateString('en-US', { month: 'short' });
 const longMonth = (month: string) =>
@@ -42,7 +39,7 @@ function MonthlyBars({ months, values, color, selected, onSelect }: MonthlyBarsP
   const data = months.map((m, i) => ({
     value: values[i],
     // Twelve labels don't fit: label every other month, counting back from the latest.
-    label: months.length <= 6 || (months.length - 1 - i) % 2 === 0 ? shortMonth(m) : '',
+    label: (months.length - 1 - i) % 2 === 0 ? shortMonth(m) : '',
     frontColor: i === selected ? theme.colors.tertiary : color,
     onPress: () => onSelect(i === selected ? null : i),
   }));
@@ -74,47 +71,26 @@ function MonthlyBars({ months, values, color, selected, onSelect }: MonthlyBarsP
   );
 }
 
-interface InsightsTrendViewProps {
-  trend: SpendingTrend;
-  range: TrendRange;
-  onRangeChange: (range: TrendRange) => void;
-}
-
-export function InsightsTrendView({ trend, range, onRangeChange }: InsightsTrendViewProps) {
+export function InsightsTrendView({ trend }: { trend: SpendingTrend }) {
   const theme = useTheme();
   const formatAmount = useSettingsStore((s) => s.formatAmount);
   const [selectedMonth, setSelectedMonth] = useState<number | null>(null);
   const [selectedCategoryMonth, setSelectedCategoryMonth] = useState<number | null>(null);
   const [categoryId, setCategoryId] = useState<number | null>(null);
 
+  const monthCount = trend.months.length;
   const totals = useMemo(() => trend.totals.map((t) => t.expenses), [trend.totals]);
-  const rangeTotal = totals.reduce((a, b) => a + b, 0);
+  const periodTotal = totals.reduce((a, b) => a + b, 0);
   const activeMonths = totals.filter((t) => t > 0).length;
   const category = trend.categories.find((c) => c.category_id === categoryId) ?? trend.categories[0];
 
-  const header = (
-    <SegmentedButtons
-      value={String(range)}
-      onValueChange={(v) => {
-        setSelectedMonth(null);
-        setSelectedCategoryMonth(null);
-        onRangeChange(Number(v) as TrendRange);
-      }}
-      buttons={TREND_RANGES.map((r) => ({ value: String(r), label: `${r} months` }))}
-      style={styles.range}
-    />
-  );
-
-  if (rangeTotal === 0) {
+  if (periodTotal === 0) {
     return (
-      <>
-        {header}
-        <InsightsEmptyState
-          icon="chart-bar"
-          title="No expenses"
-          message={`Nothing recorded in the last ${range} months.`}
-        />
-      </>
+      <InsightsEmptyState
+        icon="chart-bar"
+        title="No expenses"
+        message={`Nothing recorded in the last ${monthCount} months.`}
+      />
     );
   }
 
@@ -123,9 +99,8 @@ export function InsightsTrendView({ trend, range, onRangeChange }: InsightsTrend
 
   return (
     <>
-      {header}
       <InsightSection
-        title={`Last ${range} months`}
+        title={`Last ${monthCount} months`}
         subtitle={
           selected
             ? `${longMonth(selected.month)}: ${formatAmount(selected.expenses)}`
@@ -137,7 +112,7 @@ export function InsightsTrendView({ trend, range, onRangeChange }: InsightsTrend
               Total
             </Text>
             <Text variant="titleMedium" numberOfLines={1} adjustsFontSizeToFit style={{ color: theme.colors.onSurface }}>
-              {formatAmount(rangeTotal)}
+              {formatAmount(periodTotal)}
             </Text>
           </View>
           <View style={styles.stat}>
@@ -145,7 +120,7 @@ export function InsightsTrendView({ trend, range, onRangeChange }: InsightsTrend
               Monthly average
             </Text>
             <Text variant="titleMedium" numberOfLines={1} adjustsFontSizeToFit style={{ color: theme.colors.onSurface }}>
-              {formatAmount(rangeTotal / Math.max(1, activeMonths))}
+              {formatAmount(periodTotal / Math.max(1, activeMonths))}
             </Text>
           </View>
         </View>
@@ -156,7 +131,7 @@ export function InsightsTrendView({ trend, range, onRangeChange }: InsightsTrend
           selected={selectedMonth}
           onSelect={setSelectedMonth}
         />
-        {activeMonths < range && (
+        {activeMonths < monthCount && (
           <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant, marginTop: 8 }}>
             Average over the {activeMonths} month{activeMonths === 1 ? '' : 's'} with expenses.
           </Text>
@@ -170,7 +145,7 @@ export function InsightsTrendView({ trend, range, onRangeChange }: InsightsTrend
             ? `${category.category_name}, ${longMonth(trend.months[selectedCategoryMonth])}: ${formatAmount(
                 category.monthly[selectedCategoryMonth]
               )}`
-            : `${category.category_name}: ${formatAmount(category.total)} in ${range} months`
+            : `${category.category_name}: ${formatAmount(category.total)} in ${monthCount} months`
         }>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
           {trend.categories.map((c) => (
@@ -196,14 +171,14 @@ export function InsightsTrendView({ trend, range, onRangeChange }: InsightsTrend
         />
       </InsightSection>
 
-      <InsightSection title="Category totals" subtitle={`Last ${range} months`}>
+      <InsightSection title="Category totals" subtitle={`Last ${monthCount} months`}>
         {trend.categories.map((c) => (
           <CategoryShareRow
             key={c.category_id}
             name={c.category_name}
             color={c.category_color ?? theme.colors.outline}
             amount={formatAmount(c.total)}
-            percentage={(c.total * 100) / rangeTotal}
+            percentage={(c.total * 100) / periodTotal}
           />
         ))}
       </InsightSection>
@@ -212,10 +187,6 @@ export function InsightsTrendView({ trend, range, onRangeChange }: InsightsTrend
 }
 
 const styles = StyleSheet.create({
-  range: {
-    marginHorizontal: 16,
-    marginBottom: 12,
-  },
   stats: {
     flexDirection: 'row',
     gap: 12,

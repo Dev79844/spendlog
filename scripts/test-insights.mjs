@@ -171,26 +171,33 @@ test('empty month: zeros and empty lists', () => {
   assert.ok(m.daily.every((d) => d.expenses === 0));
 });
 
-test('spending trend: months across a year boundary, empty months as zero', () => {
+test('spending trend: twelve months across a year boundary, empty months as zero', () => {
   const db = sampleDb();
-  const trend = insights.getSpendingTrend(db, '2026-04', 6);
-  assert.deepEqual(trend.months, ['2025-11', '2025-12', '2026-01', '2026-02', '2026-03', '2026-04']);
+  add(db, 'Food', 999, day(2025, 4, 30), 'too old for the trend');
+  const trend = insights.getSpendingTrend(db, '2026-04');
+  assert.equal(insights.TREND_MONTHS, 12);
+  assert.deepEqual(trend.months, [
+    '2025-05', '2025-06', '2025-07', '2025-08', '2025-09', '2025-10',
+    '2025-11', '2025-12', '2026-01', '2026-02', '2026-03', '2026-04',
+  ]);
+  const zeros = [0, 0, 0, 0, 0, 0, 0];
   assert.deepEqual(
-    trend.totals.map((t) => [t.month, t.expenses]),
-    [['2025-11', 0], ['2025-12', 50], ['2026-01', 400], ['2026-02', 250], ['2026-03', 10], ['2026-04', 0]]
+    trend.totals.map((t) => t.expenses),
+    [...zeros, 50, 400, 250, 10, 0]
   );
+  assert.equal(trend.totals[7].month, '2025-12');
   assert.deepEqual(
     trend.categories.map((c) => [c.category_name, c.total, c.monthly]),
     [
-      ['Travel', 450, [0, 0, 300, 150, 0, 0]],
-      ['Food', 210, [0, 50, 100, 50, 10, 0]],
-      ['Old', 50, [0, 0, 0, 50, 0, 0]],
+      ['Travel', 450, [...zeros, 0, 300, 150, 0, 0]],
+      ['Food', 210, [...zeros, 50, 100, 50, 10, 0]],
+      ['Old', 50, [...zeros, 0, 0, 50, 0, 0]],
     ]
   );
 });
 
-test('spending trend: twelve months, empty database', () => {
-  const trend = insights.getSpendingTrend(freshDb(), '2026-03', 12);
+test('spending trend: empty database', () => {
+  const trend = insights.getSpendingTrend(freshDb(), '2026-03');
   assert.equal(trend.months.length, 12);
   assert.equal(trend.months[0], '2025-04');
   assert.ok(trend.totals.every((t) => t.expenses === 0));
