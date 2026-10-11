@@ -1,4 +1,5 @@
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
+import * as Application from 'expo-application';
 import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, View } from 'react-native';
@@ -33,6 +34,17 @@ import type { Category, TransactionKind } from '@/lib/types';
 
 // Set to false for production
 const DEV_MODE = true;
+
+// Read from the installed package, so a release APK shows the versionName and
+// versionCode CI derived from its tag, not the repo's app.json.
+const APP_VERSION = [
+  'Spendlog',
+  Application.nativeApplicationVersion,
+  Application.nativeBuildVersion && `(${Application.nativeBuildVersion})`,
+  Application.applicationId?.endsWith('.preview') && 'Preview',
+]
+  .filter(Boolean)
+  .join(' ');
 
 export default function SettingsScreen() {
   const theme = useTheme();
@@ -381,7 +393,7 @@ export default function SettingsScreen() {
         </Text>
         <View style={[styles.card, { backgroundColor: theme.colors.surface, padding: 16 }]}>
           <Text variant="bodyMedium" style={{ color: theme.colors.onSurface }}>
-            SpendLog v1.0.0
+            {APP_VERSION}
           </Text>
           <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant, marginTop: 4 }}>
             A simple, offline-first expense tracker
