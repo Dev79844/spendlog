@@ -38,6 +38,8 @@ export default function EditCategoryScreen() {
     if (id) {
       const category = categories.find((c) => c.id === parseInt(id));
       if (category) {
+        // Prefill the form once the category is available.
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setName(category.name);
         setColor(category.color ?? PRESET_COLORS[0]);
       }
