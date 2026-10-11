@@ -12,8 +12,9 @@ Spendlog: an offline-first, single-user expense tracker for Android (primary) an
 | Web | `npm run web` (not a supported target: there is no metro config for `expo-sqlite`'s web build) |
 | Lint | `npm run lint` |
 | Type-check | `npx tsc --noEmit` (no npm script) |
+| Tests | `npm test` (CSV export/import, plain Node + `node:sqlite`, no device) |
 
-There are no tests. Check a change with lint plus type-check, and run it on a device when behaviour changes.
+The only tests cover CSV export/import (`scripts/test-csv.mjs`). Check a change with lint, type-check and `npm test`, and run it on a device when behaviour changes.
 
 ## Releases
 
@@ -34,6 +35,7 @@ The workflow fails unless the APK's signer is the template debug keystore (SHA-2
 - `components/`: kebab-case files exporting PascalCase components.
 - `lib/db/`: all SQL. `index.ts` opens `spendlog.db`, creates tables, seeds default categories, and holds the date helpers. `seed.ts` is dev-only test data, wired to buttons in Settings.
 - `lib/stores/`: one zustand store per domain (`category-store`, `expense-store`, `settings-store`).
+- `lib/csv.ts`: the CSV interchange format (serialize, parse, validate). Pure and import-free so Node can run it. `lib/db/csv.ts` does the export query and the import plan/apply; it takes the database as a parameter (screens pass `db`) so the tests can use `node:sqlite`. The CSV keeps `YYYY-MM-DD` dates and ISO timestamps whatever the storage format; adapt `lib/db/csv.ts`, not the file format, when the schema changes. UI: `components/csv-data-section.tsx` in Settings.
 - `lib/types.ts`: row types, input types, store state types, `DEFAULT_CATEGORIES`.
 - `constants/theme.ts`: `PaperLightTheme` / `PaperDarkTheme` and the legacy `Colors` map.
 
