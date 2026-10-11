@@ -44,7 +44,7 @@ install_apk() {
 
 # Prints the checkout directory to serve for $1 (empty: this checkout).
 checkout_for() {
-  local target=${1:-} dir
+  local target=${1:-} dir sha
   if [ -z "$target" ]; then
     echo "$ROOT"
   elif [ -d "$target" ]; then
@@ -52,13 +52,15 @@ checkout_for() {
   else
     git -C "$ROOT" fetch --quiet origin "$target" \
       || die "no branch '$target' on origin"
+    # FETCH_HEAD is per worktree, so pass the commit itself.
+    sha=$(git -C "$ROOT" rev-parse FETCH_HEAD)
     dir="$(dirname "$ROOT")/preview-${target##*/}"
     if [ -d "$dir" ]; then
       [ -z "$(git -C "$dir" status --porcelain --untracked-files=no)" ] \
         || die "$dir has local changes; commit or discard them first"
-      git -C "$dir" checkout --quiet --detach FETCH_HEAD >&2
+      git -C "$dir" checkout --quiet --detach "$sha" >&2
     else
-      git -C "$ROOT" worktree add --quiet --detach "$dir" FETCH_HEAD >&2
+      git -C "$ROOT" worktree add --quiet --detach "$dir" "$sha" >&2
     fi
     echo "$dir"
   fi
