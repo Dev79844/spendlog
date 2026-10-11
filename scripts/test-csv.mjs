@@ -1,5 +1,5 @@
 // Tests for CSV export/import. Runs under plain Node (no device):
-//   npm test
+//   npm test            (runs this file under TZ=UTC, Asia/Kolkata, America/New_York)
 // lib/csv.ts and lib/db/csv.ts are loaded through Node's TypeScript type
 // stripping; the database side runs against node:sqlite with the same schema
 // as lib/db/index.ts.
@@ -133,16 +133,80 @@ test('parse rejects an unterminated quote', () => {
 });
 
 test('values', () => {
-  assert.equal(csv.isValidDate('2024-02-29'), true);
-  assert.equal(csv.isValidDate('2025-02-29'), false);
-  assert.equal(csv.isValidDate('2025-1-05'), false);
   assert.equal(csv.parseAmount('12.50'), 12.5);
   assert.equal(csv.parseAmount(' 0.3 '), 0.3);
   for (const bad of ['0', '-5', 'abc', '1,000', '1e3', '', 'NaN']) assert.equal(csv.parseAmount(bad), null, bad);
   assert.equal(csv.toIsoTimestamp('2025-03-04 05:06:07'), '2025-03-04T05:06:07.000Z');
   assert.equal(csv.toIsoTimestamp('2025-03-04T05:06:07.123Z'), '2025-03-04T05:06:07.123Z');
-  assert.equal(csv.toIsoTimestamp('yesterday'), null);
   assert.equal(csv.exportFileName(new Date(2026, 0, 5, 9, 7)), 'spendlog-export-20260105-0907.csv');
+});
+
+// ---------------------------------------------------------------------------
+// Dates and timestamps. `npm test` runs the whole file under each of these
+// timezones; expected values are [UTC, Asia/Kolkata, America/New_York].
+
+const TZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
+const TZ_INDEX = { UTC: 0, 'Etc/UTC': 0, 'Asia/Kolkata': 1, 'Asia/Calcutta': 1, 'America/New_York': 2 }[TZ];
+const byZone = (values) => (typeof values === 'string' ? values : values[TZ_INDEX]);
+
+test(`date column → local calendar day (TZ=${TZ})`, { skip: TZ_INDEX === undefined && `unsupported TZ ${TZ}` }, () => {
+  const cases = [
+    ['2026-05-27', '2026-05-27'],
+    ['2026/05/27', '2026-05-27'],
+    [' 2026-05-27 ', '2026-05-27'],
+    ['2026-05-27T23:30', '2026-05-27'], // no zone = local wall clock
+    ['2026-05-27T00:15:00', '2026-05-27'],
+    // IST near midnight: 20:00Z is 01:30 next day in India, 16:00 in New York.
+    ['2026-05-26T20:00:00Z', ['2026-05-26', '2026-05-27', '2026-05-26']],
+    ['2026-05-26T20:00:00.5z', ['2026-05-26', '2026-05-27', '2026-05-26']],
+    ['2026-05-27T02:00:00+05:30', ['2026-05-26', '2026-05-27', '2026-05-26']],
+    ['2026-05-27T02:00:00+0530', ['2026-05-26', '2026-05-27', '2026-05-26']],
+    ['2026-05-27T03:00:00-04:00', '2026-05-27'],
+    ['2026-05-27T01:00:00Z', ['2026-05-27', '2026-05-27', '2026-05-26']],
+    ['2026-05-26 20:00:00', ['2026-05-26', '2026-05-27', '2026-05-26']], // SQLite = UTC
+    ['2026-05-26 20:00:00+00:00', ['2026-05-26', '2026-05-27', '2026-05-26']],
+    ['1779825600', ['2026-05-26', '2026-05-27', '2026-05-26']], // epoch s = 2026-05-26T20:00Z
+    ['1779825600000', ['2026-05-26', '2026-05-27', '2026-05-26']], // epoch ms, same instant
+    ['1779854400000', '2026-05-27'], // 2026-05-27T04:00Z
+  ];
+  for (const [input, expected] of cases) assert.equal(csv.parseDateValue(input), byZone(expected), input);
+});
+
+test(`timestamps → ISO UTC (TZ=${TZ})`, { skip: TZ_INDEX === undefined && `unsupported TZ ${TZ}` }, () => {
+  const cases = [
+    ['2026-05-26 20:00:00', '2026-05-26T20:00:00.000Z'],
+    ['2025-03-04 05:06:07', '2025-03-04T05:06:07.000Z'],
+    ['2026-05-27T09:57:00Z', '2026-05-27T09:57:00.000Z'],
+    ['2026-05-27T09:57:00.123456Z', '2026-05-27T09:57:00.123Z'],
+    ['2026-05-27T02:00:00+05:30', '2026-05-26T20:30:00.000Z'],
+    ['1779825600', '2026-05-26T20:00:00.000Z'],
+    ['1779825600123', '2026-05-26T20:00:00.123Z'],
+    ['2026-05-27T09:57', ['2026-05-27T09:57:00.000Z', '2026-05-27T04:27:00.000Z', '2026-05-27T13:57:00.000Z']],
+    ['2026-05-27', ['2026-05-27T00:00:00.000Z', '2026-05-26T18:30:00.000Z', '2026-05-27T04:00:00.000Z']],
+  ];
+  for (const [input, expected] of cases) assert.equal(csv.toIsoTimestamp(input), byZone(expected), input);
+});
+
+test('unparseable dates are rejected', () => {
+  const bad = [
+    '', 'yesterday', '05/03/2026', '27/05/2026', '5-3-26', '2026-02-30', '2026-13-01', '2026-5-27',
+    '2026-05-27T24:00', '2026-05-27T10:60', '2026-05-27Z', '2026-05-27T10:00+15:00',
+    '177982560', '17798256000', '177982560000', '-1779825600', '1779825600.5', '0999-01-01',
+  ];
+  for (const value of bad) {
+    assert.equal(csv.parseDateValue(value), null, value);
+    assert.equal(csv.toIsoTimestamp(value), null, value);
+  }
+});
+
+test('date errors name the row, column, value and accepted formats', () => {
+  const r = csv.parseImportCsv('date,amount,category,created_at\n2026-05-27,5,Food,\n05/03/2026,5,Food,\n2026-05-27,5,Food,soon\n');
+  assert.deepEqual(r.errors.map((e) => e.row), [3, 4]);
+  assert.match(r.errors[0].message, /^date "05\/03\/2026" is ambiguous.*YYYY-MM-DD.*epoch/);
+  assert.match(r.errors[1].message, /^created_at "soon" is not a recognised date\. Use YYYY-MM-DD/);
+  // Empty timestamps are fine: the database side defaults them to now.
+  assert.equal(r.expenses.length, 1);
+  assert.equal(r.expenses[0].created_at, null);
 });
 
 // ---------------------------------------------------------------------------
@@ -254,6 +318,27 @@ test('categories match by name case-insensitively', () => {
   const plan = importText(db, 'date,amount,category,category_color\n2025-01-01,5,FOOD & dining,#FFFFFF\n2025-01-02,6,new cat,#00FF00\n2025-01-03,7,New Cat,\n');
   assert.deepEqual(plan.newCategories.map((c) => [c.name, c.color]), [['new cat', '#00FF00']]);
   assert.deepEqual(expensesOf(db).map((e) => e.category), ['Food & Dining', 'new cat', 'new cat']);
+});
+
+test('lenient dates and timestamps import as the current schema stores them', () => {
+  const db = freshDb();
+  const before = Date.now();
+  importText(db, [
+    'date,amount,category,created_at,updated_at',
+    '1779825600000,10,Food & Dining,2026-05-26 20:00:00,',
+    '2026-05-27T02:00:00+05:30,11,Food & Dining,1779825600,2026-05-27T09:57',
+    '2026/05/27,12,Food & Dining,,',
+  ].join('\n'));
+  const rows = expensesOf(db);
+  const day = byZone(['2026-05-26', '2026-05-27', '2026-05-26']);
+  assert.deepEqual(rows.map((r) => r.date), [day, day, '2026-05-27']);
+  assert.equal(rows[0].created_at, '2026-05-26T20:00:00.000Z');
+  assert.equal(rows[1].created_at, '2026-05-26T20:00:00.000Z');
+  assert.equal(rows[1].updated_at, new Date(2026, 4, 27, 9, 57).toISOString());
+  for (const value of [rows[0].updated_at, rows[2].created_at, rows[2].updated_at]) {
+    assert.match(value, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    assert.ok(Date.parse(value) >= before - 1000, `${value} defaults to now`);
+  }
 });
 
 test('a failure part-way through rolls the whole import back', () => {

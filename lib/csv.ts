@@ -9,8 +9,9 @@
  * Every expense is one `expense` row. Every category, including unused and
  * deleted (inactive) ones, is also one `category` row at the end of the file,
  * so the export is a complete backup in a single file the share sheet can send.
- * Dates are `YYYY-MM-DD`, timestamps ISO 8601 UTC, independent of how the
- * database stores them.
+ * Export writes dates as `YYYY-MM-DD` and timestamps as ISO 8601 UTC,
+ * independent of how the database stores them. Import is lenient about date
+ * and time formats (see "Dates and timestamps" below).
  */
 
 export const CSV_COLUMNS = [
@@ -164,18 +165,8 @@ export function parseCsv(text: string): string[][] {
 // ---------------------------------------------------------------------------
 // Values
 
-const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 const AMOUNT_RE = /^(\d+(\.\d*)?|\.\d+)$/;
 const COLOR_RE = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
-const SQLITE_TIMESTAMP_RE = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}(\.\d+)?)$/;
-
-export function isValidDate(value: string): boolean {
-  const m = DATE_RE.exec(value);
-  if (!m) return false;
-  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
-  const date = new Date(Date.UTC(y, mo - 1, d));
-  return date.getUTCFullYear() === y && date.getUTCMonth() === mo - 1 && date.getUTCDate() === d;
-}
 
 /** Returns the amount as a number, or null unless it is a plain positive decimal. */
 export function parseAmount(value: string): number | null {
@@ -185,16 +176,111 @@ export function parseAmount(value: string): number | null {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
+// ---------------------------------------------------------------------------
+// Dates and timestamps
+//
+// Import is lenient so files from older and newer app versions, and sheets
+// re-saved by a spreadsheet, still load. Accepted, for `date` and the
+// timestamp columns alike:
+//   2026-05-27                    calendar day
+//   2026/05/27                    calendar day
+//   2026-05-27T09:57[:00[.123]]   local time (device timezone)
+//   2026-05-27T09:57:00Z          UTC; also +05:30, +0530, +05 offsets
+//   2026-05-27 09:57:00           UTC (SQLite CURRENT_TIMESTAMP), or with an offset
+//   1779875820                    epoch seconds (10 digits)
+//   1779875820000                 epoch milliseconds (13 digits)
+// `DD/MM/YYYY` and `MM/DD/YYYY` are rejected: the order can't be known safely.
+
+export const ACCEPTED_DATE_FORMATS =
+  'YYYY-MM-DD, an ISO 8601 date-time (2026-05-27T09:57:00Z, with an offset like +05:30, or no zone for local time), YYYY-MM-DD HH:MM:SS (UTC), or epoch seconds (10 digits) / milliseconds (13 digits)';
+
+const DATE_TIME_RE =
+  /^(\d{4})[-/](\d{2})[-/](\d{2})(?:([T ])(\d{2}):(\d{2})(?::(\d{2})(?:[.,](\d+))?)?)?\s*(Z|[+-]\d{2}(?::?\d{2})?)?$/i;
+const SLASHED_DMY_RE = /^\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}$/;
+
 /**
- * Normalises a timestamp to ISO 8601 UTC. Accepts ISO strings and SQLite's
- * `CURRENT_TIMESTAMP` form (`YYYY-MM-DD HH:MM:SS`, which is UTC). Returns null
- * if it can't be parsed.
+ * A parsed date or timestamp: either wall-clock fields in the device's
+ * timezone (no zone given) or an exact instant.
+ */
+type When =
+  | { kind: 'local'; y: number; mo: number; d: number; h: number; mi: number; s: number; ms: number }
+  | { kind: 'instant'; time: number };
+
+function isValidDay(y: number, mo: number, d: number): boolean {
+  const date = new Date(Date.UTC(y, mo - 1, d));
+  return (
+    y >= 1000 &&
+    date.getUTCFullYear() === y &&
+    date.getUTCMonth() === mo - 1 &&
+    date.getUTCDate() === d
+  );
+}
+
+function parseWhen(value: string): When | null {
+  const v = value.trim();
+  if (/^\d{10}$/.test(v)) return { kind: 'instant', time: Number(v) * 1000 };
+  if (/^\d{13}$/.test(v)) return { kind: 'instant', time: Number(v) };
+
+  const m = DATE_TIME_RE.exec(v);
+  if (!m) return null;
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const hasTime = m[4] !== undefined;
+  const [h, mi, s] = [Number(m[5] ?? 0), Number(m[6] ?? 0), Number(m[7] ?? 0)];
+  const ms = Number((m[8] ?? '').slice(0, 3).padEnd(3, '0'));
+  const zone = m[9];
+  if (!isValidDay(y, mo, d) || h > 23 || mi > 59 || s > 59) return null;
+  if (zone && !hasTime) return null;
+
+  if (!zone && m[4] !== ' ') return { kind: 'local', y, mo, d, h, mi, s, ms };
+
+  // A space-separated time without a zone is SQLite's CURRENT_TIMESTAMP: UTC.
+  let offsetMinutes = 0;
+  if (zone && zone.toUpperCase() !== 'Z') {
+    const digits = zone.slice(1).replace(':', '');
+    const oh = Number(digits.slice(0, 2));
+    const om = Number(digits.slice(2) || 0);
+    if (oh > 14 || om > 59) return null;
+    offsetMinutes = (zone[0] === '-' ? -1 : 1) * (oh * 60 + om);
+  }
+  return { kind: 'instant', time: Date.UTC(y, mo - 1, d, h, mi, s, ms) - offsetMinutes * 60_000 };
+}
+
+const pad = (n: number, width = 2) => String(n).padStart(width, '0');
+
+/**
+ * Parses a `date` value to the local calendar day `YYYY-MM-DD` (the device's
+ * timezone decides which day an instant falls on). Null if unparseable.
+ */
+export function parseDateValue(value: string): string | null {
+  const when = parseWhen(value);
+  if (!when) return null;
+  if (when.kind === 'local') return `${pad(when.y, 4)}-${pad(when.mo)}-${pad(when.d)}`;
+  const date = new Date(when.time);
+  if (Number.isNaN(date.getTime())) return null;
+  return `${pad(date.getFullYear(), 4)}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+/**
+ * Parses a timestamp value to ISO 8601 UTC. A value without a zone is local
+ * time (a bare date is local midnight), except `YYYY-MM-DD HH:MM:SS`, which is
+ * SQLite's UTC form. Null if unparseable.
  */
 export function toIsoTimestamp(value: string): string | null {
-  const sqlite = SQLITE_TIMESTAMP_RE.exec(value.trim());
-  const candidate = sqlite ? `${sqlite[1]}T${sqlite[2]}Z` : value.trim();
-  const time = Date.parse(candidate);
-  return Number.isNaN(time) ? null : new Date(time).toISOString();
+  const when = parseWhen(value);
+  if (!when) return null;
+  const date =
+    when.kind === 'instant'
+      ? new Date(when.time)
+      : new Date(when.y, when.mo - 1, when.d, when.h, when.mi, when.s, when.ms);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+/** The error for an unparseable date or timestamp in `column`. */
+export function dateValueError(column: string, value: string): string {
+  const reason = SLASHED_DMY_RE.test(value.trim())
+    ? "is ambiguous: day/month order can't be told apart safely"
+    : 'is not a recognised date';
+  return `${column} "${value}" ${reason}. Use ${ACCEPTED_DATE_FORMATS}.`;
 }
 
 /** `spendlog-export-YYYYMMDD-HHMM.csv` in local time. */
@@ -336,7 +422,7 @@ export function parseImportCsv(text: string): CsvImportResult {
       const raw = get(c);
       if (!raw) return null;
       const iso = toIsoTimestamp(raw);
-      if (!iso) errors.push(`${c} "${raw}" is not a valid timestamp`);
+      if (!iso) errors.push(dateValueError(c, raw));
       return iso;
     };
 
@@ -373,8 +459,9 @@ export function parseImportCsv(text: string): CsvImportResult {
       return;
     }
 
-    const date = get('date');
-    if (!isValidDate(date)) errors.push(`date "${date}" is not a valid YYYY-MM-DD date`);
+    const dateRaw = get('date');
+    const date = parseDateValue(dateRaw);
+    if (date === null) errors.push(dateValueError('date', dateRaw));
     const amountRaw = get('amount');
     const amount = parseAmount(amountRaw);
     if (amount === null) errors.push(`amount "${amountRaw}" is not a positive number`);
@@ -387,7 +474,7 @@ export function parseImportCsv(text: string): CsvImportResult {
     const createdAt = timestamp('created_at');
     const updatedAt = timestamp('updated_at');
 
-    if (errors.length > 0 || amount === null) {
+    if (errors.length > 0 || amount === null || date === null) {
       errors.forEach((message) => result.errors.push({ row, message }));
       return;
     }

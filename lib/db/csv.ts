@@ -232,7 +232,7 @@ export function applyCsvImport(db: CsvDatabase, plan: CsvImportPlan): void {
           e.description,
           e.metadata,
           e.created_at ?? now,
-          e.updated_at ?? e.created_at ?? now,
+          e.updated_at ?? now,
         ]
       );
     }
