@@ -40,6 +40,16 @@ A personal expense tracking app built with React Native and Expo. Vibe coded for
 
 > **Note:** This app uses native modules (SQLite, DateTimePicker) and won't work in Expo Go. You need a development build.
 
+## Releases
+
+Tag a commit on `main` and push the tag. CI then builds a signed arm64 APK and attaches it to a GitHub Release:
+
+```bash
+git tag v1.2.3 <commit on main> && git push origin v1.2.3
+gh release download v1.2.3 --pattern '*.apk'
+adb install -r spendlog-1.2.3.apk   # never uninstall: it would delete your data
+```
+
 ## Project Structure
 
 ```
