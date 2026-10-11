@@ -47,13 +47,14 @@ function freshDb() {
 
 /**
  * An existing install from before the epoch migration, upgraded by it. Only
- * migration 1, the conversion CSV import mirrors: migration 2 then moves some
- * days the old app shifted, depending on TZ (scripts/test-shifted-dates.mjs).
+ * migration 1, the conversion CSV import mirrors, and the additive migration 3
+ * (income tables): migration 2 moves some days the old app shifted, depending
+ * on TZ (scripts/test-shifted-dates.mjs).
  */
 function migratedPreMigrationDb() {
   const db = adapt(new DatabaseSync(':memory:'));
   db.raw.exec(PRE_MIGRATION_SQL);
-  runMigrations(db, MIGRATIONS.filter((m) => m.version === 1));
+  runMigrations(db, MIGRATIONS.filter((m) => m.version !== 2));
   return db;
 }
 

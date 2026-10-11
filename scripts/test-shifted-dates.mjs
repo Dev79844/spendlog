@@ -232,7 +232,12 @@ function legacyDb() {
 const onlyVersion = (version) => MIGRATIONS.filter((m) => m.version <= version);
 const dayOf = (db, id) => toDayKey(db.getFirstSync('SELECT date FROM expenses WHERE id = ?', [id]).date);
 const reviewOf = (db, id) => db.getFirstSync('SELECT * FROM date_review WHERE expense_id = ?', [id]);
-const snapshot = (db) => db.getAllSync('SELECT * FROM expenses ORDER BY id');
+// Expense rows, without the two empty columns migration 3 (income and
+// recurring) adds, so a database stopped at version 1 compares equal.
+const snapshot = (db) =>
+  db
+    .getAllSync('SELECT * FROM expenses ORDER BY id')
+    .map(({ recurring_rule_id, occurrence_date, ...row }) => row);
 
 function checkCases(db, cases = CASES) {
   for (const c of cases) {
@@ -310,7 +315,7 @@ test(`migration 2 is idempotent (TZ=${TZ})`, () => {
   runMigrations(db);
   const rows = snapshot(db);
   const reviews = db.getAllSync('SELECT * FROM date_review ORDER BY expense_id');
-  db.execSync(`PRAGMA user_version = ${MIGRATIONS.at(-1).version - 1}`);
+  db.execSync('PRAGMA user_version = 1'); // replays migration 2 (and the later ones)
   runMigrations(db);
   assert.deepEqual(snapshot(db), rows);
   assert.deepEqual(db.getAllSync('SELECT * FROM date_review ORDER BY expense_id'), reviews);
