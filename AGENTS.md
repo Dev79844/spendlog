@@ -31,7 +31,19 @@ A tag push runs the workflow file from the tagged commit. To rebuild an existing
 
 Release notes list the PRs merged since the previous published release (highest versionCode below the tag), from GitHub's release-notes generator via `.github/scripts/release-pr-list.sh`, followed by the build info. If that fails, the release is still published with the build info only, and a warning. The workflow reads the script from its own commit, so a manual rebuild of an older tag still gets it. After changing it, run `.github/scripts/test-release-pr-list.sh` (stubbed `gh`, no network) and `actionlint`.
 
-The workflow fails unless the APK's signer is the template debug keystore (SHA-256 `FA:C6:17:…:91:03:3B:9C`), because the installed app is signed with it. Never uninstall the app on the phone to update it: it holds the only copy of the data.
+The workflow re-signs the APK with key rotation (see Signing) and fails unless its signers are exactly the expected ones. Never uninstall the app on the phone to update it: it holds the only copy of the data.
+
+## Signing
+
+Releases up to v1.3.0 are signed only with the public React Native/Expo template `debug.keystore` (alias `androiddebugkey`, SHA-256 `FA:C6:17:…:91:03:3B:9C`), which anyone can sign with. Later releases use APK Signature Scheme v3 key rotation to the private release key (alias `spendlog`, RSA 4096, SHA-256 `37:CB:1F:…:E3:A1:3C`), so they still install with `adb install -r` over an app signed with the template key:
+
+- `android-signing/lineage.bin` is the proof of rotation, made once with `apksigner rotate` (template key → private key). It holds both certificates and the template key's signature over the new one, no private key; every rotated APK carries a copy, so it is public. The template key keeps only the installed-data capability (updates keep the app's data); shared UID, permission, auth and rollback are off, so an APK signed only with the template key can no longer update the app once a rotated release is installed.
+- `.github/scripts/sign-release-apk.sh` re-signs Gradle's APK (still signed with the template key by the prebuild config): v3.1 block (Android 13+, `--rotation-min-sdk-version 33`) with the private key and the lineage; v3.0 (Android 9–12) and v2 (Android 7–8) with the template key. No v1 or v4, as with Gradle at minSdk 24. `.github/scripts/verify-apk-signers.sh` fails on any other signer, a missing v3.1 block or a different lineage. The workflow takes both scripts and the lineage from its own commit.
+- The private key lives only in `~/.config/spendlog-signing/` on the dev machine (`spendlog-release.p12`, PKCS12, and `keystore-password`, which is also the key password; directory 700, files 600) and in the Actions secrets `SPENDLOG_KEYSTORE_B64` and `SPENDLOG_KEYSTORE_PASSWORD`, set by `scripts/set-signing-secrets.sh` (checks the keystore against the workflow's `EXPECTED_SIGNER_SHA256` first, never prints the values). Without them the release job fails before signing. Never commit, print or log the keystore or its password.
+- The user keeps an offline backup of both files (password manager or encrypted USB). Losing the key means no further update can install over the app: the only way out would be CSV export → uninstall → install → import.
+- The template key is still needed (v2/v3.0 signatures and the lineage's first entry); the workflow uses the prebuild's `android/app/debug.keystore` and checks its fingerprint. The phone (Android 16) reads only the v3.1 block. If Android ever refused a rotated update, `adb install -r` fails and the installed app is unchanged.
+
+Check a signed APK locally with `APKSIGNER=<build-tools>/apksigner EXPECTED_SIGNER_SHA256=… TEMPLATE_SIGNER_SHA256=… .github/scripts/verify-apk-signers.sh <apk>`; `apksigner` (`lib/apksigner.jar`) is plain Java, so the Linux build-tools zip works on aarch64 too.
 
 ## Hot reload on the phone
 

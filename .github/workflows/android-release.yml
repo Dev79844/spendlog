@@ -28,10 +28,17 @@ concurrency:
 
 env:
   TAG: ${{ inputs.tag || github.ref_name }}
-  # SHA-256 of the public React Native/Expo template debug.keystore
-  # (alias androiddebugkey). The installed app is signed with it, so any
-  # other key would make `adb install -r` fail.
-  EXPECTED_SIGNER_SHA256: FA:C6:17:45:DC:09:03:78:6F:B9:ED:E6:2A:96:2B:39:9F:73:48:F0:BB:6F:89:9B:83:32:66:75:91:03:3B:9C
+  # Signing (see "Signing" in AGENTS.md): APK Signature Scheme v3.1 key
+  # rotation from the public template debug key, which releases up to v1.3.0
+  # were signed with, to the private release key in the SPENDLOG_KEYSTORE_*
+  # secrets. android-signing/lineage.bin links the two.
+  # SHA-256 of the private release key's certificate (alias spendlog).
+  EXPECTED_SIGNER_SHA256: 37:CB:1F:DC:4F:CD:C3:0A:79:CC:72:E5:9F:1D:19:0D:AC:F8:5A:5A:6C:76:8B:E9:E1:99:24:D0:1B:E3:A1:3C
+  SPENDLOG_KEY_ALIAS: spendlog
+  # SHA-256 of the public React Native/Expo template debug.keystore (alias
+  # androiddebugkey): the oldest key in the lineage, and still the signer for
+  # Android 7-12.
+  TEMPLATE_SIGNER_SHA256: FA:C6:17:45:DC:09:03:78:6F:B9:ED:E6:2A:96:2B:39:9F:73:48:F0:BB:6F:89:9B:83:32:66:75:91:03:3B:9C
   EXPECTED_PACKAGE: com.spendlog.app
 
 jobs:
@@ -119,11 +126,45 @@ jobs:
         run: npx expo prebuild --platform android --no-install
 
       # The prebuild template signs release builds with signingConfigs.debug,
-      # i.e. android/app/debug.keystore; the verify step below enforces it.
+      # i.e. android/app/debug.keystore; the next step re-signs the APK.
       # arm64-v8a only: the target phone is arm64 and the APK is much smaller.
       - name: Build release APK (arm64-v8a)
         working-directory: android
         run: ./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a
+
+      # Fails closed: without both secrets, or with a keystore whose
+      # certificate is not EXPECTED_SIGNER_SHA256, nothing is signed.
+      - name: Sign APK with key rotation
+        env:
+          SPENDLOG_KEYSTORE_B64: ${{ secrets.SPENDLOG_KEYSTORE_B64 }}
+          SPENDLOG_KEYSTORE_PASSWORD: ${{ secrets.SPENDLOG_KEYSTORE_PASSWORD }}
+        run: |
+          if [ -z "$SPENDLOG_KEYSTORE_B64" ] || [ -z "$SPENDLOG_KEYSTORE_PASSWORD" ]; then
+            echo "::error::The SPENDLOG_KEYSTORE_B64 and SPENDLOG_KEYSTORE_PASSWORD secrets must be set (scripts/set-signing-secrets.sh)"
+            exit 1
+          fi
+          build_tools="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -n 1)"
+
+          # The scripts and the lineage come from this workflow's own commit,
+          # like release-pr-list.sh below: an older tag's tree may not have them.
+          signing="$RUNNER_TEMP/signing"
+          mkdir -p "$signing"
+          for file in .github/scripts/sign-release-apk.sh .github/scripts/verify-apk-signers.sh \
+            android-signing/lineage.bin; do
+            git show "$GITHUB_SHA:$file" > "$signing/$(basename "$file")"
+          done
+
+          keystore="$RUNNER_TEMP/spendlog-release.p12"
+          trap 'rm -f "$keystore"' EXIT
+          (umask 077 && base64 -d <<< "$SPENDLOG_KEYSTORE_B64" > "$keystore")
+
+          APKSIGNER="$build_tools/apksigner" \
+          LINEAGE="$signing/lineage.bin" \
+          TEMPLATE_KEYSTORE=android/app/debug.keystore \
+          SPENDLOG_KEYSTORE="$keystore" \
+            bash "$signing/sign-release-apk.sh" \
+              android/app/build/outputs/apk/release/app-release.apk \
+              "$RUNNER_TEMP/app-release-signed.apk"
 
       - name: Verify APK
         id: apk
@@ -131,21 +172,13 @@ jobs:
           VERSION_CODE: ${{ steps.version.outputs.code }}
           VERSION_NAME: ${{ steps.version.outputs.name }}
         run: |
-          apk=android/app/build/outputs/apk/release/app-release.apk
+          apk="$RUNNER_TEMP/app-release-signed.apk"
           build_tools="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -n 1)"
 
-          certs=$("$build_tools/apksigner" verify --print-certs "$apk")
-          echo "$certs"
-          # apksigner labels digests by scheme ("V2 Signer: certificate SHA-256
-          # digest: ...") or, with v1 signing, "Signer #1 certificate ...". Every
-          # digest it prints, whatever the label, must be the expected key.
-          digests=$(sed -n 's/^.*[Ss]igner.* certificate SHA-256 digest: *\([0-9a-fA-F]*\)$/\1/p' <<< "$certs" \
-            | tr 'A-F' 'a-f' | sort -u)
-          expected=$(tr -d ':' <<< "$EXPECTED_SIGNER_SHA256" | tr 'A-F' 'a-f')
-          if [ "$digests" != "$expected" ]; then
-            echo "::error::APK signer SHA-256 is [$(echo $digests)], expected $expected"
-            exit 1
-          fi
+          # v3.1 (Android 13+) with the private key, everything else with the
+          # template key, lineage template -> private; any other signer fails.
+          APKSIGNER="$build_tools/apksigner" \
+            bash "$RUNNER_TEMP/signing/verify-apk-signers.sh" "$apk"
 
           badging=$("$build_tools/aapt2" dump badging "$apk")
           package_line=$(grep -m 1 '^package:' <<< "$badging" || true)
@@ -200,7 +233,8 @@ jobs:
           | versionName | $VERSION_NAME |
           | versionCode | $VERSION_CODE |
           | Built | $(date -u +%Y-%m-%dT%H:%M:%SZ) |
-          | Signer SHA-256 | \`$EXPECTED_SIGNER_SHA256\` |
+          | Signer SHA-256 (Android 13+) | \`$EXPECTED_SIGNER_SHA256\` |
+          | Rotated from | \`$TEMPLATE_SIGNER_SHA256\` |
           | Size | ${SIZE_MB} MB |
 
           Install over the existing app (never uninstall: the app holds the only copy of the data):
