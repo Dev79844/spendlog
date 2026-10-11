@@ -25,7 +25,7 @@ registerHooks({
 const csv = await import('../lib/csv.ts');
 const dbCsv = await import('../lib/db/csv.ts');
 const { DEFAULT_CATEGORIES } = await import('../lib/types.ts');
-const { runMigrations } = await import('../lib/db/migrations.ts');
+const { runMigrations, MIGRATIONS } = await import('../lib/db/migrations.ts');
 const { parseExpenseDay, parseTimestamp } = await import('../lib/date.ts');
 const { PRE_MIGRATION_SQL } = await import('./fixtures/pre-migration-db.mjs');
 const PRE_MIGRATION_EXPORT = readFileSync(new URL('./fixtures/pre-migration-export.csv', import.meta.url), 'utf8');
@@ -43,11 +43,15 @@ function freshDb() {
   return db;
 }
 
-/** An existing install from before the epoch migration, upgraded by it. */
+/**
+ * An existing install from before the epoch migration, upgraded by it. Only
+ * migration 1, the conversion CSV import mirrors: migration 2 then moves some
+ * days the old app shifted, depending on TZ (scripts/test-shifted-dates.mjs).
+ */
 function migratedPreMigrationDb() {
   const db = adapt(new DatabaseSync(':memory:'));
   db.raw.exec(PRE_MIGRATION_SQL);
-  runMigrations(db);
+  runMigrations(db, MIGRATIONS.filter((m) => m.version === 1));
   return db;
 }
 

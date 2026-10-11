@@ -98,6 +98,17 @@ export interface MonthlySummary {
   expenseCount: number;
 }
 
+// An expense day the shifted-dates migration fixed or wants the user to check
+// (table date_review, see lib/db/migrations.ts and lib/db/date-review.ts).
+export interface DateReviewItem extends ExpenseWithCategory {
+  // 'add-shifted': fixed automatically; 'add-uncertain': saved near midnight
+  // or near the UTC offset; 'edited': saved by the old edit screen.
+  reason: 'add-shifted' | 'add-uncertain' | 'edited';
+  status: 'pending' | 'fixed';
+  original_date: number; // the day as the old app stored it
+  suggested_date: number;
+}
+
 // Default categories
 export const DEFAULT_CATEGORIES: CreateCategoryInput[] = [
   { name: 'Food & Dining', color: '#FF6B6B', icon: 'food' },

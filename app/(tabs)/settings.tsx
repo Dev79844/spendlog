@@ -15,7 +15,9 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { CsvDataSection } from '@/components/csv-data-section';
+import { db } from '@/lib/db';
 import { getCategoryExpenseCount } from '@/lib/db/categories';
+import { getOpenDateReviewCount } from '@/lib/db/date-review';
 import { seedTestData, clearAllExpenses, getExpenseCount } from '@/lib/db/seed';
 import { useCategoryStore } from '@/lib/stores/category-store';
 import { useExpenseStore } from '@/lib/stores/expense-store';
@@ -40,10 +42,12 @@ export default function SettingsScreen() {
   const [currencyModalVisible, setCurrencyModalVisible] = useState(false);
   const [themeModalVisible, setThemeModalVisible] = useState(false);
   const [expenseCount, setExpenseCount] = useState(0);
+  const [dateReview, setDateReview] = useState({ pending: 0, fixed: 0 });
 
   useFocusEffect(
     useCallback(() => {
       loadCategories();
+      setDateReview(getOpenDateReviewCount(db));
       if (DEV_MODE) {
         setExpenseCount(getExpenseCount());
       }
@@ -252,6 +256,34 @@ export default function SettingsScreen() {
         <Text variant="titleMedium" style={{ color: theme.colors.onBackground, marginBottom: 12 }}>
           Data
         </Text>
+        {dateReview.pending + dateReview.fixed > 0 && (
+          <Pressable
+            onPress={() => router.push('/review-dates' as any)}
+            style={({ pressed }) => [
+              styles.card,
+              styles.settingItem,
+              { backgroundColor: theme.colors.surface, marginBottom: 12, opacity: pressed ? 0.7 : 1 },
+            ]}>
+            <View style={styles.settingLeft}>
+              <MaterialCommunityIcons name="calendar-alert" size={24} color={theme.colors.primary} />
+              <View style={{ flexShrink: 1 }}>
+                <Text variant="bodyLarge" style={{ color: theme.colors.onSurface }}>
+                  Review dates
+                </Text>
+                <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>
+                  {dateReview.pending > 0
+                    ? `${dateReview.pending} expense${dateReview.pending === 1 ? '' : 's'} may be a day off`
+                    : `${dateReview.fixed} date${dateReview.fixed === 1 ? '' : 's'} corrected automatically`}
+                </Text>
+              </View>
+            </View>
+            <MaterialCommunityIcons
+              name="chevron-right"
+              size={24}
+              color={theme.colors.onSurfaceVariant}
+            />
+          </Pressable>
+        )}
         <CsvDataSection
           onImported={() => {
             loadCategories();
