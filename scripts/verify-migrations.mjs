@@ -141,6 +141,10 @@ function seedLegacy(db) {
 // The upgrade checks below are about migration 1 alone; migration 2 (shifted
 // days) is covered by scripts/test-shifted-dates.mjs.
 const MIGRATION_1 = MIGRATIONS.filter((m) => m.version === 1);
+// The income/recurring checks add migration 3 on top of that; the full chain
+// (1, 2, 3 in order) is checked further down.
+const MIGRATION_3 = MIGRATIONS.filter((m) => m.version === 3);
+const WITHOUT_SHIFTED_DATES = MIGRATIONS.filter((m) => m.version !== 2);
 const LATEST = MIGRATIONS.at(-1).version;
 
 const localNoon = (y, m, d) => new Date(y, m - 1, d, 12).getTime();
@@ -271,18 +275,78 @@ try {
     );
   });
 
-  check('idempotent: rerunning is a no-op, and so is replaying migration 1', () => {
+  // --- Income and recurring (migration 'income-and-recurring') ---------------
+  check('income: migration 3 runs on top of 1', () => {
+    assert.deepEqual(runMigrations(db, MIGRATION_3), { fromVersion: 1, toVersion: LATEST });
+    const indexes = db
+      .getAllSync("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'expenses' ORDER BY name")
+      .map((r) => r.name);
+    assert.deepEqual(indexes, ['idx_expenses_category', 'idx_expenses_date', 'idx_expenses_occurrence']);
+  });
+
+  check('income: existing expenses gain empty recurring columns, nothing else changes', () => {
+    const columns = db.getAllSync('PRAGMA table_info(expenses)').map((c) => c.name);
+    assert.deepEqual(columns.slice(-2), ['recurring_rule_id', 'occurrence_date']);
+    const linked = db.getFirstSync(
+      'SELECT COUNT(*) AS n FROM expenses WHERE recurring_rule_id IS NOT NULL OR occurrence_date IS NOT NULL'
+    );
+    assert.equal(linked.n, 0);
+  });
+
+  check('income: tables created, income categories seeded apart from expense categories', () => {
+    const tables = db
+      .getAllSync("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+      .map((r) => r.name);
+    assert.deepEqual(tables, ['categories', 'expenses', 'income_categories', 'incomes', 'recurring_rules', 'settings']);
+    assert.deepEqual(
+      db.getAllSync('SELECT name FROM income_categories ORDER BY id').map((r) => r.name),
+      ['Salary', 'Freelance', 'Interest', 'Refund', 'Other']
+    );
+    assert.equal(db.getFirstSync('SELECT COUNT(*) AS n FROM categories').n, 3);
+    assert.equal(db.getFirstSync('SELECT COUNT(*) AS n FROM incomes').n, 0);
+  });
+
+  check('recurring: one row per rule and occurrence day (unique index), manual rows unaffected', () => {
+    const insert = (table, rule, day) =>
+      db.runSync(
+        `INSERT INTO ${table} (amount, date, category_id, recurring_rule_id, occurrence_date, created_at, updated_at)
+         VALUES (1, ?, 1, ?, ?, 1, 1)`,
+        [day, rule, rule === null ? null : day]
+      );
+    const day = localNoon(2025, 5, 1);
+    for (const table of ['expenses', 'incomes']) {
+      insert(table, 1, day);
+      assert.throws(() => insert(table, 1, day), /UNIQUE/);
+      insert(table, 2, day); // another rule, same day
+      insert(table, null, day); // manual rows: no key
+      insert(table, null, day);
+      db.runSync(`DELETE FROM ${table} WHERE amount = 1 AND created_at = 1`);
+    }
+    assert.throws(
+      () =>
+        db.runSync(
+          `INSERT INTO recurring_rules (kind, amount, category_id, frequency, interval, start_date, created_at, updated_at)
+           VALUES ('expense', 1, 1, 'fortnightly', 1, 1, 1, 1)`
+        ),
+      /CHECK/
+    );
+  });
+
+  check('idempotent: rerunning is a no-op, and so is replaying migrations 1 and 3', () => {
     const snapshot = db.getAllSync('SELECT * FROM expenses ORDER BY id');
+    const incomeCategories = db.getAllSync('SELECT * FROM income_categories ORDER BY id');
     let calls = 0;
-    assert.deepEqual(runMigrations(db, MIGRATION_1, { backup: () => calls++ }), {
-      fromVersion: 1,
-      toVersion: 1,
+    assert.deepEqual(runMigrations(db, MIGRATIONS, { backup: () => calls++ }), {
+      fromVersion: LATEST,
+      toVersion: LATEST,
     });
     assert.equal(calls, 0);
     db.execSync('PRAGMA user_version = 0');
-    runMigrations(db, MIGRATION_1);
+    // Migration 2 from version 0 would (correctly) move some of these days.
+    runMigrations(db, WITHOUT_SHIFTED_DATES);
     assert.deepEqual(db.getAllSync('SELECT * FROM expenses ORDER BY id'), snapshot);
-    assert.equal(getUserVersion(db), 1);
+    assert.deepEqual(db.getAllSync('SELECT * FROM income_categories ORDER BY id'), incomeCategories);
+    assert.equal(getUserVersion(db), LATEST);
   });
   db.raw.close();
 
@@ -296,8 +360,84 @@ try {
     const names = fresh
       .getAllSync("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
       .map((r) => r.name);
-    assert.deepEqual(names, ['categories', 'date_review', 'expenses', 'settings']);
+    assert.deepEqual(names, [
+      'categories', 'date_review', 'expenses', 'income_categories', 'incomes', 'recurring_rules', 'settings',
+    ]);
+    assert.equal(fresh.getFirstSync('SELECT COUNT(*) AS n FROM income_categories').n, 5);
     fresh.raw.close();
+  });
+
+  // --- The whole chain, in order ----------------------------------------------
+  // Expense rows without the two columns migration 3 adds.
+  const expenseRows = (d) =>
+    d
+      .getAllSync('SELECT * FROM expenses ORDER BY id')
+      .map(({ recurring_rule_id, occurrence_date, ...row }) => row);
+  const migrated = (d) => ({
+    version: getUserVersion(d),
+    tables: d
+      .getAllSync("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+      .map((r) => r.name),
+    columns: d.getAllSync('PRAGMA table_info(expenses)').map((c) => c.name).slice(-2),
+  });
+  const ALL_TABLES = [
+    'categories', 'date_review', 'expenses', 'income_categories', 'incomes', 'recurring_rules', 'settings',
+  ];
+
+  check('chain from version 0: 1, 2, 3 in order; 3 keeps every row migration 2 left', () => {
+    const full = wrap(new DatabaseSync(':memory:'));
+    seedLegacy(full);
+    assert.deepEqual(runMigrations(full), { fromVersion: 0, toVersion: LATEST });
+    assert.deepEqual(migrated(full), {
+      version: LATEST,
+      tables: ALL_TABLES,
+      columns: ['recurring_rule_id', 'occurrence_date'],
+    });
+    const upTo2 = wrap(new DatabaseSync(':memory:'));
+    seedLegacy(upTo2);
+    runMigrations(upTo2, MIGRATIONS.filter((m) => m.version <= 2));
+    assert.deepEqual(expenseRows(full), expenseRows(upTo2));
+    assert.deepEqual(
+      full.getAllSync('SELECT * FROM date_review ORDER BY expense_id'),
+      upTo2.getAllSync('SELECT * FROM date_review ORDER BY expense_id')
+    );
+    assert.equal(full.getFirstSync('SELECT COUNT(*) AS n FROM expenses').n, legacyRows.length);
+    full.raw.close();
+    upTo2.raw.close();
+  });
+
+  check('chain from version 1 (the released app): 2 then 3, rows kept', () => {
+    const v1 = wrap(new DatabaseSync(':memory:'));
+    seedLegacy(v1);
+    runMigrations(v1, MIGRATION_1);
+    const migratedAt = Date.now();
+    // Added by the released app after the conversion; migration 2 leaves it alone.
+    v1.runSync(
+      'INSERT INTO expenses (amount, date, category_id, created_at, updated_at) VALUES (7, ?, 1, ?, ?)',
+      [localNoon(2025, 6, 1), migratedAt + 1, migratedAt + 1]
+    );
+    const options = { originalSchemaMigratedAt: () => migratedAt + 1 };
+    const before = v1.getAllSync('SELECT * FROM expenses ORDER BY id');
+    assert.deepEqual(runMigrations(v1, MIGRATIONS, options), { fromVersion: 1, toVersion: LATEST });
+    assert.deepEqual(migrated(v1), {
+      version: LATEST,
+      tables: ALL_TABLES,
+      columns: ['recurring_rule_id', 'occurrence_date'],
+    });
+    const after = expenseRows(v1);
+    assert.equal(after.length, before.length);
+    // Only dates migration 2 recorded in date_review as fixed may differ.
+    const fixed = new Set(
+      v1.getAllSync("SELECT expense_id FROM date_review WHERE status = 'fixed'").map((r) => r.expense_id)
+    );
+    after.forEach((row, i) => {
+      const { date, ...rest } = row;
+      const { date: oldDate, ...oldRest } = before[i];
+      assert.deepEqual(rest, oldRest);
+      if (!fixed.has(row.id)) assert.equal(date, oldDate);
+    });
+    assert.equal(v1.getFirstSync('SELECT COUNT(*) AS n FROM income_categories').n, 5);
+    v1.raw.close();
   });
 
   // --- Failure rolls back -----------------------------------------------------

@@ -21,11 +21,13 @@ interface MonthlyBarsProps {
   months: string[];
   values: number[];
   color: string;
+  /** Colour of the selected bar; defaults to the theme's tertiary. */
+  highlight?: string;
   selected: number | null;
   onSelect: (index: number | null) => void;
 }
 
-function MonthlyBars({ months, values, color, selected, onSelect }: MonthlyBarsProps) {
+function MonthlyBars({ months, values, color, highlight, selected, onSelect }: MonthlyBarsProps) {
   const theme = useTheme();
   const { width } = useWindowDimensions();
   const symbol = useSettingsStore((s) => s.currency.symbol);
@@ -40,7 +42,7 @@ function MonthlyBars({ months, values, color, selected, onSelect }: MonthlyBarsP
     value: values[i],
     // Twelve labels don't fit: label every other month, counting back from the latest.
     label: (months.length - 1 - i) % 2 === 0 ? shortMonth(m) : '',
-    frontColor: i === selected ? theme.colors.tertiary : color,
+    frontColor: i === selected ? (highlight ?? theme.colors.tertiary) : color,
     onPress: () => onSelect(i === selected ? null : i),
   }));
 
@@ -77,12 +79,63 @@ export function InsightsTrendView({ trend }: { trend: SpendingTrend }) {
   const [selectedMonth, setSelectedMonth] = useState<number | null>(null);
   const [selectedCategoryMonth, setSelectedCategoryMonth] = useState<number | null>(null);
   const [categoryId, setCategoryId] = useState<number | null>(null);
+  const [selectedIncomeMonth, setSelectedIncomeMonth] = useState<number | null>(null);
 
   const monthCount = trend.months.length;
   const totals = useMemo(() => trend.totals.map((t) => t.expenses), [trend.totals]);
+  const incomes = useMemo(() => trend.totals.map((t) => t.income), [trend.totals]);
   const periodTotal = totals.reduce((a, b) => a + b, 0);
+  const periodIncome = incomes.reduce((a, b) => a + b, 0);
+  const periodNet = periodIncome - periodTotal;
   const activeMonths = totals.filter((t) => t > 0).length;
   const category = trend.categories.find((c) => c.category_id === categoryId) ?? trend.categories[0];
+
+  const signed = (amount: number) => `${amount < 0 ? '−' : ''}${formatAmount(Math.abs(amount))}`;
+  const selectedIncome = selectedIncomeMonth !== null ? trend.totals[selectedIncomeMonth] : undefined;
+  const incomeSection = periodIncome > 0 && (
+    <InsightSection
+      title="Income and net"
+      subtitle={
+        selectedIncome
+          ? `${longMonth(selectedIncome.month)}: ${formatAmount(selectedIncome.income)} in, net ${signed(
+              selectedIncome.net
+            )}`
+          : 'Tap a bar to see the month'
+      }>
+      <View style={styles.stats}>
+        <View style={styles.stat}>
+          <Text variant="labelSmall" style={{ color: theme.colors.onSurfaceVariant }}>
+            Income
+          </Text>
+          <Text variant="titleMedium" numberOfLines={1} adjustsFontSizeToFit style={{ color: theme.colors.onSurface }}>
+            {formatAmount(periodIncome)}
+          </Text>
+        </View>
+        <View style={styles.stat}>
+          <Text variant="labelSmall" style={{ color: theme.colors.onSurfaceVariant }}>
+            {periodNet < 0 ? 'Net (over)' : 'Net saved'}
+          </Text>
+          <Text
+            variant="titleMedium"
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            style={{ color: periodNet < 0 ? theme.colors.error : theme.colors.onSurface }}>
+            {signed(periodNet)}
+          </Text>
+        </View>
+      </View>
+      <MonthlyBars
+        months={trend.months}
+        values={incomes}
+        color={theme.colors.tertiary}
+        highlight={theme.colors.primary}
+        selected={selectedIncomeMonth}
+        onSelect={setSelectedIncomeMonth}
+      />
+    </InsightSection>
+  );
+
+  if (periodTotal === 0 && periodIncome > 0) return <>{incomeSection}</>;
 
   if (periodTotal === 0) {
     return (
@@ -137,6 +190,8 @@ export function InsightsTrendView({ trend }: { trend: SpendingTrend }) {
           </Text>
         )}
       </InsightSection>
+
+      {incomeSection}
 
       <InsightSection
         title="By category"

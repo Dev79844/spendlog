@@ -16,6 +16,7 @@ import {
   type MonthInsights,
   type SpendingTrend,
 } from '@/lib/db/insights';
+import { useRecurringStore } from '@/lib/stores/recurring-store';
 
 type InsightsMode = 'month' | 'trend';
 
@@ -28,8 +29,10 @@ export default function InsightsScreen() {
   const [monthPickerVisible, setMonthPickerVisible] = useState(false);
   const [monthInsights, setMonthInsights] = useState<MonthInsights | null>(null);
   const [trend, setTrend] = useState<SpendingTrend | null>(null);
+  const recurringGeneration = useRecurringStore((s) => s.generation);
 
-  // Read-heavy screen: query on focus (expenses may have changed elsewhere) and on every change.
+  // Read-heavy screen: query on focus (expenses may have changed elsewhere), on every change, and
+  // when the recurring catch-up added rows while this screen was open.
   useFocusEffect(
     useCallback(() => {
       if (view === 'month') {
@@ -37,7 +40,8 @@ export default function InsightsScreen() {
       } else {
         setTrend(getSpendingTrend(db, getCurrentMonth()));
       }
-    }, [view, selectedMonth])
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [view, selectedMonth, recurringGeneration])
   );
 
   const isCurrentMonth = selectedMonth >= getCurrentMonth();

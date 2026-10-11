@@ -2,7 +2,7 @@ import { DarkTheme, DefaultTheme, ThemeProvider } from 'expo-router/react-naviga
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useState } from 'react';
-import { View } from 'react-native';
+import { AppState, View } from 'react-native';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
 import { ActivityIndicator, PaperProvider, Text } from 'react-native-paper';
 import 'react-native-reanimated';
@@ -12,11 +12,22 @@ import { useColorScheme } from '@/hooks/use-color-scheme';
 import { initDatabase } from '@/lib/db';
 import { useCategoryStore } from '@/lib/stores/category-store';
 import { useExpenseStore } from '@/lib/stores/expense-store';
+import { useRecurringStore } from '@/lib/stores/recurring-store';
 import { useSettingsStore } from '@/lib/stores/settings-store';
 
 export const unstable_settings = {
   anchor: '(tabs)',
 };
+
+// Generates due recurring entries. A failure is logged, never fatal: the
+// rows it would add are generated on the next start instead.
+function catchUpRecurring() {
+  try {
+    useRecurringStore.getState().runDue();
+  } catch (error) {
+    console.error('Failed to generate recurring entries:', error);
+  }
+}
 
 export default function RootLayout() {
   const systemColorScheme = useColorScheme();
@@ -39,8 +50,10 @@ export default function RootLayout() {
       }
       try {
         loadSettings();
+        catchUpRecurring();
         await loadCategories();
         await loadExpenses();
+        useRecurringStore.getState().loadRules();
       } catch (error) {
         console.error('Failed to load data:', error);
       } finally {
@@ -49,6 +62,16 @@ export default function RootLayout() {
     }
     init();
   }, []);
+
+  // Recurring rules have no background job: whenever the app comes back to
+  // the foreground, generate what fell due while it was away.
+  useEffect(() => {
+    if (!isReady) return;
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') catchUpRecurring();
+    });
+    return () => subscription.remove();
+  }, [isReady]);
 
   // Determine effective color scheme based on settings
   const effectiveColorScheme =
@@ -99,6 +122,15 @@ export default function RootLayout() {
             <Stack.Screen
               name="expense/[id]"
               options={{ presentation: 'modal', title: 'Edit Expense' }}
+            />
+            <Stack.Screen name="recurring/index" options={{ title: 'Recurring' }} />
+            <Stack.Screen
+              name="recurring/add"
+              options={{ presentation: 'modal', title: 'Add Recurring' }}
+            />
+            <Stack.Screen
+              name="recurring/[id]"
+              options={{ presentation: 'modal', title: 'Edit Recurring' }}
             />
             <Stack.Screen
               name="category/add"

@@ -18,15 +18,18 @@ import { CsvDataSection } from '@/components/csv-data-section';
 import { db } from '@/lib/db';
 import { getCategoryExpenseCount } from '@/lib/db/categories';
 import { getOpenDateReviewCount } from '@/lib/db/date-review';
+import { getCategoryRuleCount } from '@/lib/db/recurring';
 import { seedTestData, clearAllExpenses, getExpenseCount } from '@/lib/db/seed';
 import { useCategoryStore } from '@/lib/stores/category-store';
 import { useExpenseStore } from '@/lib/stores/expense-store';
+import { useRecurringStore } from '@/lib/stores/recurring-store';
 import {
   CURRENCIES,
   type Currency,
   type ThemeMode,
   useSettingsStore,
 } from '@/lib/stores/settings-store';
+import type { Category, TransactionKind } from '@/lib/types';
 
 // Set to false for production
 const DEV_MODE = true;
@@ -35,7 +38,8 @@ export default function SettingsScreen() {
   const theme = useTheme();
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { categories, loadCategories, deleteCategory } = useCategoryStore();
+  const { categories, incomeCategories, loadCategories, deleteCategory } = useCategoryStore();
+  const { rules, loadRules } = useRecurringStore();
   const { loadExpenses } = useExpenseStore();
   const { currency, themeMode, setCurrency, setThemeMode } = useSettingsStore();
 
@@ -48,19 +52,26 @@ export default function SettingsScreen() {
     useCallback(() => {
       loadCategories();
       setDateReview(getOpenDateReviewCount(db));
+      loadRules();
       if (DEV_MODE) {
         setExpenseCount(getExpenseCount());
       }
     }, [])
   );
 
-  const handleDeleteCategory = (id: number, name: string) => {
-    const count = getCategoryExpenseCount(id);
+  const handleDeleteCategory = (id: number, name: string, kind: TransactionKind = 'expense') => {
+    const count = getCategoryExpenseCount(id, kind);
+    const ruleCount = getCategoryRuleCount(db, id, kind);
 
-    if (count > 0) {
+    if (count > 0 || ruleCount > 0) {
+      const noun = kind === 'income' ? 'income entr' : 'expense';
+      const used = [
+        count > 0 ? `${count} ${noun}${count > 1 ? (kind === 'income' ? 'ies' : 's') : kind === 'income' ? 'y' : ''}` : '',
+        ruleCount > 0 ? `${ruleCount} recurring rule${ruleCount > 1 ? 's' : ''}` : '',
+      ].filter(Boolean);
       Alert.alert(
         'Cannot Delete',
-        `"${name}" has ${count} expense${count > 1 ? 's' : ''} associated with it. Delete or reassign those expenses first.`,
+        `"${name}" is used by ${used.join(' and ')}. Delete or reassign those first.`,
         [{ text: 'OK' }]
       );
       return;
@@ -71,7 +82,7 @@ export default function SettingsScreen() {
       {
         text: 'Delete',
         style: 'destructive',
-        onPress: () => deleteCategory(id),
+        onPress: () => deleteCategory(id, kind),
       },
     ]);
   };
@@ -124,6 +135,69 @@ export default function SettingsScreen() {
       case 'system':
         return 'System Default';
     }
+  };
+
+  const renderCategories = (title: string, list: Category[], kind: TransactionKind) => {
+    const query = kind === 'income' ? '?kind=income' : '';
+    return (
+      <View style={styles.section}>
+        <View style={styles.sectionHeader}>
+          <Text variant="titleMedium" style={{ color: theme.colors.onBackground }}>
+            {title}
+          </Text>
+          <IconButton
+            icon="plus"
+            mode="contained"
+            size={20}
+            onPress={() => router.push(`/category/add${query}` as any)}
+          />
+        </View>
+
+        <View style={[styles.card, { backgroundColor: theme.colors.surface }]}>
+          {list.map((category, index) => (
+            <React.Fragment key={category.id}>
+              <Pressable
+                onPress={() => router.push(`/category/${category.id}${query}` as any)}
+                style={({ pressed }) => [styles.categoryItem, { opacity: pressed ? 0.7 : 1 }]}>
+                <View style={styles.categoryLeft}>
+                  <View
+                    style={[
+                      styles.colorDot,
+                      { backgroundColor: category.color ?? theme.colors.primary },
+                    ]}
+                  />
+                  <Text variant="bodyLarge" style={{ color: theme.colors.onSurface }}>
+                    {category.name}
+                  </Text>
+                </View>
+                <View style={styles.categoryRight}>
+                  <IconButton
+                    icon="delete-outline"
+                    size={20}
+                    iconColor={theme.colors.error}
+                    onPress={() => handleDeleteCategory(category.id, category.name, kind)}
+                  />
+                  <MaterialCommunityIcons
+                    name="chevron-right"
+                    size={24}
+                    color={theme.colors.onSurfaceVariant}
+                  />
+                </View>
+              </Pressable>
+              {index < list.length - 1 && <Divider />}
+            </React.Fragment>
+          ))}
+
+          {list.length === 0 && (
+            <View style={styles.emptyState}>
+              <Text variant="bodyMedium" style={{ color: theme.colors.onSurfaceVariant }}>
+                No categories. Tap + to add one.
+              </Text>
+            </View>
+          )}
+        </View>
+      </View>
+    );
   };
 
   return (
@@ -192,64 +266,35 @@ export default function SettingsScreen() {
         </View>
       </View>
 
-      {/* Categories Section */}
+      {/* Recurring Section */}
       <View style={styles.section}>
-        <View style={styles.sectionHeader}>
-          <Text variant="titleMedium" style={{ color: theme.colors.onBackground }}>
-            Categories
-          </Text>
-          <IconButton
-            icon="plus"
-            mode="contained"
-            size={20}
-            onPress={() => router.push('/category/add' as any)}
-          />
-        </View>
-
+        <Text variant="titleMedium" style={{ color: theme.colors.onBackground, marginBottom: 12 }}>
+          Recurring
+        </Text>
         <View style={[styles.card, { backgroundColor: theme.colors.surface }]}>
-          {categories.map((category, index) => (
-            <React.Fragment key={category.id}>
-              <Pressable
-                onPress={() => router.push(`/category/${category.id}` as any)}
-                style={({ pressed }) => [styles.categoryItem, { opacity: pressed ? 0.7 : 1 }]}>
-                <View style={styles.categoryLeft}>
-                  <View
-                    style={[
-                      styles.colorDot,
-                      { backgroundColor: category.color ?? theme.colors.primary },
-                    ]}
-                  />
-                  <Text variant="bodyLarge" style={{ color: theme.colors.onSurface }}>
-                    {category.name}
-                  </Text>
-                </View>
-                <View style={styles.categoryRight}>
-                  <IconButton
-                    icon="delete-outline"
-                    size={20}
-                    iconColor={theme.colors.error}
-                    onPress={() => handleDeleteCategory(category.id, category.name)}
-                  />
-                  <MaterialCommunityIcons
-                    name="chevron-right"
-                    size={24}
-                    color={theme.colors.onSurfaceVariant}
-                  />
-                </View>
-              </Pressable>
-              {index < categories.length - 1 && <Divider />}
-            </React.Fragment>
-          ))}
-
-          {categories.length === 0 && (
-            <View style={styles.emptyState}>
-              <Text variant="bodyMedium" style={{ color: theme.colors.onSurfaceVariant }}>
-                No categories. Tap + to add one.
-              </Text>
+          <Pressable
+            onPress={() => router.push('/recurring' as any)}
+            style={({ pressed }) => [styles.settingItem, { opacity: pressed ? 0.7 : 1 }]}>
+            <View style={styles.settingLeft}>
+              <MaterialCommunityIcons name="repeat" size={24} color={theme.colors.primary} />
+              <View>
+                <Text variant="bodyLarge" style={{ color: theme.colors.onSurface }}>
+                  Recurring expenses & income
+                </Text>
+                <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>
+                  {rules.length === 0
+                    ? 'Rent, subscriptions, salary…'
+                    : `${rules.filter((r) => r.is_active === 1).length} active, ${rules.filter((r) => r.is_active !== 1).length} paused`}
+                </Text>
+              </View>
             </View>
-          )}
+            <MaterialCommunityIcons name="chevron-right" size={24} color={theme.colors.onSurfaceVariant} />
+          </Pressable>
         </View>
       </View>
+
+      {renderCategories('Categories', categories, 'expense')}
+      {renderCategories('Income Categories', incomeCategories, 'income')}
 
       {/* Data Section */}
       <View style={styles.section}>
@@ -286,6 +331,9 @@ export default function SettingsScreen() {
         )}
         <CsvDataSection
           onImported={() => {
+            // Imported rules may already be due.
+            useRecurringStore.getState().runDue();
+            loadRules();
             loadCategories();
             loadExpenses();
             if (DEV_MODE) {

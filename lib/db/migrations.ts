@@ -504,6 +504,100 @@ function reviewShiftedDates(db: MigrationDb, context: MigrationContext) {
   }
 }
 
+// --- Income and recurring rules ----------------------------------------------
+//
+// Income lives in its own tables (`incomes`, `income_categories`) rather than
+// a type column on `expenses`, so every existing expense query, total and
+// chart keeps meaning "money spent" without a new filter. Recurring rules
+// (`recurring_rules`) generate ordinary rows in either table; a generated row
+// carries `recurring_rule_id` + `occurrence_date`, unique together, so the
+// catch-up can never insert the same occurrence twice. Every statement is
+// idempotent (IF NOT EXISTS / column checks), so replaying it is harmless.
+
+function columnExists(db: MigrationDb, table: string, column: string): boolean {
+  return columnType(db, table, column) !== null;
+}
+
+// Seeded once by the migration. Frozen here: a later change to the defaults
+// must not change what this shipped migration does.
+const INCOME_CATEGORY_SEED: [name: string, color: string, icon: string][] = [
+  ['Salary', '#2E7D32', 'briefcase'],
+  ['Freelance', '#3498DB', 'laptop'],
+  ['Interest', '#F7DC6F', 'bank'],
+  ['Refund', '#4ECDC4', 'cash-refund'],
+  ['Other', '#BDC3C7', 'dots-horizontal'],
+];
+
+function addIncomeAndRecurring(db: MigrationDb, now: number) {
+  db.execSync(`
+    CREATE TABLE IF NOT EXISTS income_categories (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL UNIQUE,
+      color TEXT,
+      icon TEXT,
+      is_active INTEGER DEFAULT 1,
+      created_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS recurring_rules (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      kind TEXT NOT NULL CHECK (kind IN ('expense', 'income')),
+      amount REAL NOT NULL,
+      category_id INTEGER NOT NULL,
+      location TEXT,
+      description TEXT,
+      frequency TEXT NOT NULL CHECK (frequency IN ('daily', 'weekly', 'monthly', 'yearly')),
+      interval INTEGER NOT NULL DEFAULT 1 CHECK (interval >= 1),
+      start_date INTEGER NOT NULL,
+      end_date INTEGER,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      last_occurrence INTEGER,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS incomes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      amount REAL NOT NULL,
+      date INTEGER NOT NULL,
+      category_id INTEGER NOT NULL,
+      description TEXT,
+      metadata TEXT,
+      recurring_rule_id INTEGER,
+      occurrence_date INTEGER,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      FOREIGN KEY (category_id) REFERENCES income_categories(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_incomes_date ON incomes(date);
+    CREATE INDEX IF NOT EXISTS idx_incomes_category ON incomes(category_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_incomes_occurrence ON incomes(recurring_rule_id, occurrence_date);
+  `);
+
+  // Added columns, not a table rebuild: existing expense rows are untouched.
+  if (!columnExists(db, 'expenses', 'recurring_rule_id')) {
+    db.execSync('ALTER TABLE expenses ADD COLUMN recurring_rule_id INTEGER');
+  }
+  if (!columnExists(db, 'expenses', 'occurrence_date')) {
+    db.execSync('ALTER TABLE expenses ADD COLUMN occurrence_date INTEGER');
+  }
+  db.execSync(
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_expenses_occurrence ON expenses(recurring_rule_id, occurrence_date)'
+  );
+
+  const seeded = db.getFirstSync<{ n: number }>('SELECT COUNT(*) AS n FROM income_categories', [])!.n;
+  if (seeded === 0) {
+    for (const [name, color, icon] of INCOME_CATEGORY_SEED) {
+      db.runSync('INSERT INTO income_categories (name, color, icon, created_at) VALUES (?, ?, ?, ?)', [
+        name,
+        color,
+        icon,
+        now,
+      ]);
+    }
+  }
+}
+
 export const MIGRATIONS: Migration[] = [
   {
     // Baseline for fresh installs, and conversion of the original schema
@@ -523,5 +617,14 @@ export const MIGRATIONS: Migration[] = [
     version: 2,
     name: 'shifted-expense-dates',
     up: reviewShiftedDates,
+  },
+  {
+    // Income tables, recurring rules, and the link columns on expenses.
+    // Additive only (no table rebuild), after migration 2's date fixes.
+    version: 3,
+    name: 'income-and-recurring',
+    up(db) {
+      addIncomeAndRecurring(db, Date.now());
+    },
   },
 ];

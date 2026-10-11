@@ -45,6 +45,8 @@ export const PaperLightTheme: MD3Theme = {
     primaryContainer: '#C8E6C9',
     secondary: '#558B2F',
     secondaryContainer: '#DCEDC8',
+    // Income amounts and the income side of the net balance.
+    tertiary: '#1565C0',
     background: Colors.light.background,
     surface: Colors.light.card,
     surfaceVariant: '#F5F5F5',
@@ -60,6 +62,7 @@ export const PaperDarkTheme: MD3Theme = {
     primaryContainer: '#1B5E20',
     secondary: '#AED581',
     secondaryContainer: '#33691E',
+    tertiary: '#90CAF9',
     background: Colors.dark.background,
     surface: Colors.dark.card,
     surfaceVariant: '#2D2D2D',

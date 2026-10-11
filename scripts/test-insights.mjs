@@ -22,6 +22,7 @@ registerHooks({
 const insights = await import('../lib/db/insights.ts');
 const { runMigrations } = await import('../lib/db/migrations.ts');
 const { toExpenseDay } = await import('../lib/date.ts');
+const { createRecurringRule, materializeDueOccurrences } = await import('../lib/db/recurring.ts');
 
 /** node:sqlite with the subset of expo-sqlite's sync API the code uses. */
 function adapt(raw) {
@@ -31,6 +32,16 @@ function adapt(raw) {
     getAllSync: (sql, params) => raw.prepare(sql).all(...params).map(plain),
     getFirstSync: (sql, params) => plain(raw.prepare(sql).get(...params)) ?? null,
     runSync: (sql, params) => raw.prepare(sql).run(...params),
+    withTransactionSync: (task) => {
+      raw.exec('BEGIN');
+      try {
+        task();
+        raw.exec('COMMIT');
+      } catch (error) {
+        raw.exec('ROLLBACK');
+        throw error;
+      }
+    },
   };
 }
 
@@ -59,6 +70,15 @@ function add(db, category, amount, date, description = null) {
   db.runSync(
     'INSERT INTO expenses (amount, date, category_id, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
     [amount, date, cat.id, description, 0, 0]
+  );
+}
+
+/** An income entry; `source` is a seeded income category (Salary, Freelance, ...). */
+function addIncome(db, source, amount, date) {
+  const cat = db.getFirstSync('SELECT id FROM income_categories WHERE name = ?', [source]);
+  db.runSync(
+    'INSERT INTO incomes (amount, date, category_id, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+    [amount, date, cat.id, null, 0, 0]
   );
 }
 
@@ -202,4 +222,76 @@ test('spending trend: empty database', () => {
   assert.equal(trend.months[0], '2025-04');
   assert.ok(trend.totals.every((t) => t.expenses === 0));
   assert.deepEqual(trend.categories, []);
+});
+
+test('month insights: income, net and their local month boundaries', () => {
+  const db = sampleDb();
+  addIncome(db, 'Salary', 1000, day(2026, 2, 1));
+  addIncome(db, 'Freelance', 75, day(2026, 2, 28));
+  addIncome(db, 'Salary', 1000, day(2026, 3, 1)); // next month
+  addIncome(db, 'Interest', 3, day(2026, 1, 31)); // previous month
+  const feb = insights.getMonthInsights(db, '2026-02', new Date(2026, 5, 1).getTime());
+  assert.equal(feb.income, 1075);
+  assert.equal(feb.incomeCount, 2);
+  assert.equal(feb.net, 1075 - 250);
+  // Income changes none of the expense figures.
+  assert.equal(feb.expenses, 250);
+  assert.equal(feb.expenseCount, 4);
+  assert.deepEqual(
+    feb.categories.map((c) => c.category_name),
+    ['Travel', 'Food', 'Old']
+  );
+  assert.equal(feb.daily.reduce((s, d) => s + d.expenses, 0), 250);
+  assert.equal(feb.largest[0].amount, 150);
+});
+
+test('month insights: net is negative when more was spent than earned, and income alone counts', () => {
+  const db = sampleDb();
+  addIncome(db, 'Refund', 100, day(2026, 1, 20));
+  const jan = insights.getMonthInsights(db, '2026-01');
+  assert.equal(jan.net, 100 - 400);
+  const onlyIncome = freshDb();
+  addIncome(onlyIncome, 'Salary', 500, day(2026, 4, 15));
+  const apr = insights.getMonthInsights(onlyIncome, '2026-04', new Date(2026, 5, 1).getTime());
+  assert.equal(apr.expenseCount, 0);
+  assert.equal(apr.income, 500);
+  assert.equal(apr.net, 500);
+  const empty = insights.getMonthInsights(freshDb(), '2026-04');
+  assert.deepEqual([empty.income, empty.incomeCount, empty.net], [0, 0, 0]);
+});
+
+test('spending trend: income and net per month, expense totals not multiplied by income rows', () => {
+  const db = sampleDb();
+  addIncome(db, 'Salary', 1000, day(2026, 1, 1));
+  addIncome(db, 'Freelance', 200, day(2026, 1, 31));
+  addIncome(db, 'Salary', 1000, day(2026, 3, 1));
+  addIncome(db, 'Salary', 999, day(2025, 4, 30)); // before the trend window
+  const trend = insights.getSpendingTrend(db, '2026-04');
+  const zeros = [0, 0, 0, 0, 0, 0, 0];
+  assert.deepEqual(trend.totals.map((t) => t.expenses), [...zeros, 50, 400, 250, 10, 0]);
+  assert.deepEqual(trend.totals.map((t) => t.income), [...zeros, 0, 1200, 0, 1000, 0]);
+  assert.deepEqual(trend.totals.map((t) => t.net), [...zeros, -50, 800, -250, 990, 0]);
+  // Expense categories only.
+  assert.deepEqual(trend.categories.map((c) => c.category_name), ['Travel', 'Food', 'Old']);
+});
+
+test('insights count generated recurring income and expenses like any other row', () => {
+  const db = freshDb();
+  const salary = db.getFirstSync("SELECT id FROM income_categories WHERE name = 'Salary'", []).id;
+  const food = db.getFirstSync("SELECT id FROM categories WHERE name = 'Food'", []).id;
+  const rule = { amount: 0, category_id: 0, location: null, description: null, interval: 1, end_date: null };
+  createRecurringRule(db, { ...rule, kind: 'income', amount: 3000, category_id: salary, frequency: 'monthly', start_date: day(2026, 1, 31) });
+  createRecurringRule(db, { ...rule, kind: 'expense', amount: 10, category_id: food, frequency: 'weekly', start_date: day(2026, 2, 2) });
+  materializeDueOccurrences(db, new Date(2026, 2, 31, 9));
+  materializeDueOccurrences(db, new Date(2026, 2, 31, 9)); // idempotent
+  const feb = insights.getMonthInsights(db, '2026-02', new Date(2026, 5, 1).getTime());
+  assert.equal(feb.income, 3000); // Jan 31 clamps to Feb 28
+  assert.equal(feb.expenses, 40); // Feb 2, 9, 16, 23
+  assert.equal(feb.net, 2960);
+  const trend = insights.getSpendingTrend(db, '2026-03');
+  assert.deepEqual(trend.totals.slice(-3).map((t) => [t.month, t.income, t.expenses]), [
+    ['2026-01', 3000, 0],
+    ['2026-02', 3000, 40],
+    ['2026-03', 3000, 50], // Mar 2, 9, 16, 23, 30
+  ]);
 });

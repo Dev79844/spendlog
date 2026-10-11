@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { View, StyleSheet, ScrollView, Pressable } from 'react-native';
 import { Text, Button, TextInput, useTheme } from 'react-native-paper';
-import { useRouter } from 'expo-router';
+import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useCategoryStore } from '@/lib/stores/category-store';
@@ -26,6 +26,8 @@ export default function AddCategoryScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { addCategory } = useCategoryStore();
+  // `?kind=income` adds an income category.
+  const isIncome = useLocalSearchParams<{ kind?: string }>().kind === 'income';
 
   const [name, setName] = useState('');
   const [color, setColor] = useState(PRESET_COLORS[0]);
@@ -41,10 +43,13 @@ export default function AddCategoryScreen() {
     setLoading(true);
     setError(null);
     try {
-      await addCategory({
-        name: name.trim(),
-        color,
-      });
+      await addCategory(
+        {
+          name: name.trim(),
+          color,
+        },
+        isIncome ? 'income' : 'expense'
+      );
       router.back();
     } catch (err: any) {
       if (err.message?.includes('UNIQUE constraint')) {
@@ -62,6 +67,7 @@ export default function AddCategoryScreen() {
       style={[styles.container, { backgroundColor: theme.colors.background }]}
       contentContainerStyle={{ paddingBottom: insets.bottom + 20 }}
       keyboardShouldPersistTaps="handled">
+      <Stack.Screen options={{ title: isIncome ? 'Add Income Category' : 'Add Category' }} />
       <View style={styles.form}>
         <TextInput
           label="Category Name"

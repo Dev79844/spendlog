@@ -2,7 +2,7 @@ import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, FlatList, Pressable, StyleSheet, View } from 'react-native';
-import { Chip, FAB, Text, useTheme } from 'react-native-paper';
+import { Chip, FAB, SegmentedButtons, Text, useTheme } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ExpenseCard } from '@/components/expense-card';
@@ -13,9 +13,16 @@ import {
     getExpensesPaginated,
     type PaginatedExpenses,
 } from '@/lib/db/expenses';
+import { getIncomesByMonthPaginated, getIncomesPaginated } from '@/lib/db/incomes';
 import { getCurrentMonth, monthKeyToDate, toDayKey } from '@/lib/date';
+import { useRecurringStore } from '@/lib/stores/recurring-store';
 import { useSettingsStore } from '@/lib/stores/settings-store';
-import type { ExpenseWithCategory } from '@/lib/types';
+import type { ExpenseWithCategory, IncomeWithCategory, TransactionKind } from '@/lib/types';
+
+// Expenses and income are separate lists (a segment at the top), not one
+// mixed list: each keeps its own count, day groups and pagination, and
+// income is a handful of rows a month that would get lost among expenses.
+type Row = ExpenseWithCategory | IncomeWithCategory;
 
 type FilterMode = 'all' | 'month';
 
@@ -50,7 +57,7 @@ interface ListItem {
   type: 'header' | 'expense';
   date?: string;
   title?: string;
-  expense?: ExpenseWithCategory;
+  expense?: Row;
   formattedAmount?: string;
 }
 
@@ -60,7 +67,9 @@ export default function ExpensesScreen() {
   const insets = useSafeAreaInsets();
   const formatAmount = useSettingsStore((s) => s.formatAmount);
 
-  const [expenses, setExpenses] = useState<ExpenseWithCategory[]>([]);
+  const [kind, setKind] = useState<TransactionKind>('expense');
+  const recurringGeneration = useRecurringStore((s) => s.generation);
+  const [expenses, setExpenses] = useState<Row[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
@@ -81,15 +90,19 @@ export default function ExpensesScreen() {
         }
       }
 
-      const result: PaginatedExpenses =
-        filterMode === 'all'
-          ? getExpensesPaginated(PAGE_SIZE, offsetRef.current)
-          : getExpensesByMonthPaginated(selectedMonth, PAGE_SIZE, offsetRef.current);
+      const result: PaginatedExpenses | { data: IncomeWithCategory[]; hasMore: boolean; total: number } =
+        kind === 'income'
+          ? filterMode === 'all'
+            ? getIncomesPaginated(PAGE_SIZE, offsetRef.current)
+            : getIncomesByMonthPaginated(selectedMonth, PAGE_SIZE, offsetRef.current)
+          : filterMode === 'all'
+            ? getExpensesPaginated(PAGE_SIZE, offsetRef.current)
+            : getExpensesByMonthPaginated(selectedMonth, PAGE_SIZE, offsetRef.current);
 
       if (reset) {
         setExpenses(result.data);
       } else {
-        setExpenses((prev) => [...prev, ...result.data]);
+        setExpenses((prev) => [...prev, ...(result.data as Row[])]);
       }
 
       setHasMore(result.hasMore);
@@ -99,7 +112,9 @@ export default function ExpensesScreen() {
       setIsLoadingMore(false);
       isFirstLoad.current = false;
     },
-    [filterMode, selectedMonth]
+    // recurringGeneration: re-query when recurring entries were generated.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [filterMode, selectedMonth, kind, recurringGeneration]
   );
 
   const loadMore = useCallback(() => {
@@ -160,9 +175,9 @@ export default function ExpensesScreen() {
 
   const handleExpensePress = useCallback(
     (id: number) => {
-      router.push(`/expense/${id}` as any);
+      router.push((kind === 'income' ? `/expense/${id}?kind=income` : `/expense/${id}`) as any);
     },
-    [router]
+    [router, kind]
   );
 
   const renderItem = useCallback(
@@ -181,11 +196,12 @@ export default function ExpensesScreen() {
         <ExpenseCard
           expense={item.expense!}
           formattedAmount={item.formattedAmount!}
+          income={kind === 'income'}
           onPress={() => handleExpensePress(item.expense!.id)}
         />
       );
     },
-    [theme.colors, handleExpensePress]
+    [theme.colors, handleExpensePress, kind]
   );
 
   const keyExtractor = useCallback(
@@ -207,27 +223,28 @@ export default function ExpensesScreen() {
     () => (
       <View style={styles.emptyState}>
         <Text variant="headlineSmall" style={{ color: theme.colors.onSurfaceVariant }}>
-          No expenses
+          {kind === 'income' ? 'No income' : 'No expenses'}
         </Text>
         <Text
           variant="bodyMedium"
           style={{ color: theme.colors.onSurfaceVariant, marginTop: 8, textAlign: 'center' }}>
           {filterMode === 'month'
-            ? `No expenses in ${selectedMonthLabel}`
-            : 'Tap the + button to add your first expense'}
+            ? `No ${kind === 'income' ? 'income' : 'expenses'} in ${selectedMonthLabel}`
+            : `Tap the + button to add your first ${kind}`}
         </Text>
       </View>
     ),
-    [theme.colors, filterMode, selectedMonthLabel]
+    [theme.colors, filterMode, selectedMonthLabel, kind]
   );
 
   const ListHeaderComponent = useMemo(
     () => (
       <Text variant="bodySmall" style={[styles.countText, { color: theme.colors.onSurfaceVariant }]}>
-        {expenses.length} of {total} expense{total !== 1 ? 's' : ''}
+        {expenses.length} of {total} {kind === 'income' ? 'income entr' : 'expense'}
+        {kind === 'income' ? (total !== 1 ? 'ies' : 'y') : total !== 1 ? 's' : ''}
       </Text>
     ),
-    [expenses.length, total, theme.colors]
+    [expenses.length, total, theme.colors, kind]
   );
 
   const ListFooterComponent = useMemo(() => {
@@ -247,6 +264,16 @@ export default function ExpensesScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
+      <SegmentedButtons
+        value={kind}
+        onValueChange={(value) => setKind(value as TransactionKind)}
+        buttons={[
+          { value: 'expense', label: 'Expenses', icon: 'cash-minus' },
+          { value: 'income', label: 'Income', icon: 'cash-plus' },
+        ]}
+        style={styles.kind}
+      />
+
       {/* Filter Chips */}
       <View style={styles.filterContainer}>
         <Chip
@@ -306,7 +333,7 @@ export default function ExpensesScreen() {
         icon="plus"
         style={[styles.fab, { backgroundColor: theme.colors.primary, bottom: 32 + insets.bottom }]}
         color={theme.colors.onPrimary}
-        onPress={() => router.push('/expense/add' as any)}
+        onPress={() => router.push(`/expense/add?kind=${kind}` as any)}
       />
 
       <MonthPickerModal
@@ -322,6 +349,10 @@ export default function ExpensesScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+  },
+  kind: {
+    marginHorizontal: 16,
+    marginTop: 12,
   },
   filterContainer: {
     flexDirection: 'row',

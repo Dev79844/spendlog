@@ -51,9 +51,34 @@ export function InsightsMonthView({ insights }: { insights: MonthInsights }) {
     [insights.daily, selectedDay, theme.colors.primary, theme.colors.tertiary]
   );
 
+  // Income, spending and what is left, for the month. Shown whenever there is income.
+  const net = insights.net;
+  const incomeRow = insights.incomeCount > 0 && (
+    <View style={styles.stats}>
+      <Stat label="Income" value={formatAmount(insights.income)} />
+      <Stat
+        label={net < 0 ? 'Net (over)' : 'Net saved'}
+        value={`${net < 0 ? '−' : ''}${formatAmount(Math.abs(net))}`}
+        color={net < 0 ? theme.colors.error : undefined}
+      />
+      <Stat
+        label="Saved"
+        value={insights.income > 0 && net > 0 ? formatPercent((net * 100) / insights.income) : '—'}
+      />
+    </View>
+  );
+
   if (insights.expenseCount === 0) {
     return (
       <>
+        {insights.incomeCount > 0 && (
+          <InsightSection title={`Income in ${monthName(insights.month)}`}>
+            <Text variant="headlineMedium" style={{ color: theme.colors.onSurface, fontWeight: '600' }}>
+              {formatAmount(insights.income)}
+            </Text>
+            {incomeRow}
+          </InsightSection>
+        )}
         {insights.previousExpenses > 0 && (
           <InsightSection title={monthName(insights.month)}>
             <Text variant="bodyMedium" style={{ color: theme.colors.onSurfaceVariant }}>
@@ -109,6 +134,7 @@ export function InsightsMonthView({ insights }: { insights: MonthInsights }) {
           <Stat label="Expenses" value={String(insights.expenseCount)} />
           <Stat label={monthName(insights.previousMonth, 'short')} value={formatAmount(insights.previousExpenses)} />
         </View>
+        {incomeRow}
       </InsightSection>
 
       <InsightSection title="By category" subtitle="Tap a slice to highlight it">
@@ -210,14 +236,14 @@ export function InsightsMonthView({ insights }: { insights: MonthInsights }) {
   );
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
+function Stat({ label, value, color }: { label: string; value: string; color?: string }) {
   const theme = useTheme();
   return (
     <View style={styles.stat}>
       <Text variant="labelSmall" numberOfLines={1} style={{ color: theme.colors.onSurfaceVariant }}>
         {label}
       </Text>
-      <Text variant="bodyMedium" numberOfLines={1} adjustsFontSizeToFit style={{ color: theme.colors.onSurface }}>
+      <Text variant="bodyMedium" numberOfLines={1} adjustsFontSizeToFit style={{ color: color ?? theme.colors.onSurface }}>
         {value}
       </Text>
     </View>

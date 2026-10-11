@@ -1,11 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { View, StyleSheet, ScrollView, Pressable, Alert } from 'react-native';
 import { Text, Button, TextInput, useTheme } from 'react-native-paper';
-import { useRouter, useLocalSearchParams } from 'expo-router';
+import { Stack, useRouter, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useCategoryStore } from '@/lib/stores/category-store';
+import { db } from '@/lib/db';
 import { getCategoryExpenseCount } from '@/lib/db/categories';
+import { getCategoryRuleCount } from '@/lib/db/recurring';
 
 const PRESET_COLORS = [
   '#FF6B6B', // Red
@@ -26,8 +28,11 @@ export default function EditCategoryScreen() {
   const theme = useTheme();
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { id } = useLocalSearchParams<{ id: string }>();
-  const { categories, updateCategory, deleteCategory } = useCategoryStore();
+  // `?kind=income` edits an income category.
+  const { id, kind: kindParam } = useLocalSearchParams<{ id: string; kind?: string }>();
+  const kind = kindParam === 'income' ? 'income' : 'expense';
+  const { categories: expenseCategories, incomeCategories, updateCategory, deleteCategory } = useCategoryStore();
+  const categories = kind === 'income' ? incomeCategories : expenseCategories;
 
   const [name, setName] = useState('');
   const [color, setColor] = useState(PRESET_COLORS[0]);
@@ -57,10 +62,14 @@ export default function EditCategoryScreen() {
     setLoading(true);
     setError(null);
     try {
-      await updateCategory(parseInt(id), {
-        name: name.trim(),
-        color,
-      });
+      await updateCategory(
+        parseInt(id),
+        {
+          name: name.trim(),
+          color,
+        },
+        kind
+      );
       router.back();
     } catch (err: any) {
       if (err.message?.includes('UNIQUE constraint')) {
@@ -76,12 +85,17 @@ export default function EditCategoryScreen() {
   const handleDelete = () => {
     if (!id) return;
 
-    const expenseCount = getCategoryExpenseCount(parseInt(id));
+    const expenseCount = getCategoryExpenseCount(parseInt(id), kind);
+    const ruleCount = getCategoryRuleCount(db, parseInt(id), kind);
 
-    if (expenseCount > 0) {
+    if (expenseCount > 0 || ruleCount > 0) {
+      const used = [
+        expenseCount > 0 ? `${expenseCount} ${kind === 'income' ? 'income' : 'expense'} entr${expenseCount > 1 ? 'ies' : 'y'}` : '',
+        ruleCount > 0 ? `${ruleCount} recurring rule${ruleCount > 1 ? 's' : ''}` : '',
+      ].filter(Boolean);
       Alert.alert(
         'Cannot Delete',
-        `This category has ${expenseCount} expense${expenseCount > 1 ? 's' : ''} associated with it. Delete or reassign those expenses first.`,
+        `This category is used by ${used.join(' and ')}. Delete or reassign those first.`,
         [{ text: 'OK' }]
       );
       return;
@@ -98,7 +112,7 @@ export default function EditCategoryScreen() {
           onPress: async () => {
             setLoading(true);
             try {
-              await deleteCategory(parseInt(id));
+              await deleteCategory(parseInt(id), kind);
               router.back();
             } catch (error) {
               console.error('Failed to delete category:', error);
@@ -116,6 +130,7 @@ export default function EditCategoryScreen() {
       style={[styles.container, { backgroundColor: theme.colors.background }]}
       contentContainerStyle={{ paddingBottom: insets.bottom + 20 }}
       keyboardShouldPersistTaps="handled">
+      <Stack.Screen options={{ title: kind === 'income' ? 'Edit Income Category' : 'Edit Category' }} />
       <View style={styles.form}>
         <TextInput
           label="Category Name"
