@@ -12,7 +12,7 @@ Spendlog: an offline-first, single-user expense tracker for Android (primary) an
 | Web | `npm run web` (not a supported target: there is no metro config for `expo-sqlite`'s web build) |
 | Lint | `npm run lint` (`expo lint` caches results; add `-- --no-cache` after changing ESLint or its plugins) |
 | Type-check | `npx tsc --noEmit` (no npm script) |
-| Tests | `npm test` (CSV export/import, plain Node + `node:sqlite`, no device) |
+| Tests | `npm test` (CSV export/import and Insights aggregates, plain Node + `node:sqlite`, no device) |
 | Verify migrations | `npm run verify-migrations` (Node 23.6+; runs `lib/db/migrations.ts` on old-schema sample DBs in several timezones) |
 
 There is no test framework; both scripts run under plain Node. Check a change with lint, type-check and `npm test`, run `npm run verify-migrations` when touching the schema or migrations, and run it on a device when behaviour changes.
@@ -34,7 +34,7 @@ The workflow fails unless the APK's signer is the template debug keystore (SHA-2
 
 ## Layout
 
-- `app/`: expo-router routes. `_layout.tsx` is the root Stack and app bootstrap. `(tabs)/` holds Home (`index`), Expenses, Settings. `expense/` and `category/` each have `add.tsx` and `[id].tsx` (edit), presented as modals; register any new modal route in the root Stack.
+- `app/`: expo-router routes. `_layout.tsx` is the root Stack and app bootstrap. `(tabs)/` holds Home (`index`), Expenses, Insights, Settings. `expense/` and `category/` each have `add.tsx` and `[id].tsx` (edit), presented as modals; register any new modal route in the root Stack.
 - `components/`: kebab-case files exporting PascalCase components.
 - `lib/db/`: all SQL. `index.ts` opens `spendlog.db`, backs it up and runs the migrations, and seeds default categories. `migrations.ts` holds the schema (see Schema changes). `seed.ts` is dev-only test data, wired to buttons in Settings.
 - `lib/date.ts`: local-time date helpers (`toExpenseDay`, `toDayKey`, `getMonthRange`, month keys) and the parsers that turn date/time text into stored epoch ms (`parseExpenseDay`, `parseTimestamp`). Pure and import-free.
@@ -43,7 +43,8 @@ The workflow fails unless the APK's signer is the template debug keystore (SHA-2
 - `lib/types.ts`: row types, input types, store state types, `DEFAULT_CATEGORIES`.
 - `constants/theme.ts`: `PaperLightTheme` / `PaperDarkTheme` and the legacy `Colors` map.
 
-Expo template leftovers, unused by the real screens: `app/(tabs)/explore.tsx` (hidden with `href: null`), `themed-text`, `themed-view`, `parallax-scroll-view`, `hello-wave`, `external-link`, `ui/collapsible`, `ui/icon-symbol*`, `hooks/use-theme-color`.
+- `lib/db/insights.ts`: SQL aggregates for the Insights tab (month breakdown, daily totals, largest expenses, monthly and per-category trends). Like `lib/db/csv.ts` it takes the database as a parameter and imports only `lib/date.ts`, so `scripts/test-insights.mjs` runs it under Node. Month and day boundaries are local ranges built with `getMonthRange` / `getMonthDayRanges` and joined as a `VALUES` table, not SQLite date functions. Sums are named by what they sum (`expenses`) so an income series can sit beside them. Charts use `react-native-gifted-charts` (on `react-native-svg`, with `expo-linear-gradient` as its gradient peer).
+- `components/month-picker-modal.tsx`: the month picker shared by Expenses and Insights.
 
 ## Data flow
 
@@ -51,7 +52,7 @@ Expo template leftovers, unused by the real screens: `app/(tabs)/explore.tsx` (h
 
 - `app/_layout.tsx` runs `initDatabase()`, then `loadSettings()`, `loadCategories()`, `loadExpenses()`, and shows a spinner until done. If `initDatabase()` throws (a failed migration), it shows an error screen and loads nothing else.
 - Writes go through store actions. They call the `lib/db` function, then reload or patch store state; the expense store re-queries the current month after every write so the joined category fields and `monthlyTotal` stay correct.
-- Read-heavy screens query `lib/db` directly and refresh in `useFocusEffect`: Home calls `getMonthlySummary` / `getRecentExpenses`, Expenses paginates with `get*Paginated`. A new list or summary screen follows that pattern, not the store.
+- Read-heavy screens query `lib/db` directly and refresh in `useFocusEffect`: Home calls `getMonthlySummary` / `getRecentExpenses`, Expenses paginates with `get*Paginated`, Insights calls `lib/db/insights.ts` with `db`. A new list or summary screen follows that pattern, not the store.
 - Store state, action signatures, and row types are declared in `lib/types.ts`; update the type there first. `settings-store` defines its own types and `CURRENCIES`.
 
 ## Conventions
