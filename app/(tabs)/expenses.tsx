@@ -1,18 +1,19 @@
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, FlatList, Pressable, ScrollView, StyleSheet, View } from 'react-native';
-import { Button, Chip, FAB, Modal, Portal, Text, useTheme } from 'react-native-paper';
+import { ActivityIndicator, FlatList, Pressable, StyleSheet, View } from 'react-native';
+import { Chip, FAB, Text, useTheme } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ExpenseCard } from '@/components/expense-card';
 import { ExpenseListSkeleton } from '@/components/expense-skeleton';
+import { MonthPickerModal } from '@/components/month-picker-modal';
 import {
     getExpensesByMonthPaginated,
     getExpensesPaginated,
     type PaginatedExpenses,
 } from '@/lib/db/expenses';
-import { getCurrentMonth, monthKeyToDate, toDayKey, toMonthKey } from '@/lib/date';
+import { getCurrentMonth, monthKeyToDate, toDayKey } from '@/lib/date';
 import { useSettingsStore } from '@/lib/stores/settings-store';
 import type { ExpenseWithCategory } from '@/lib/types';
 
@@ -125,18 +126,6 @@ export default function ExpensesScreen() {
     setSelectedMonth(month);
     setFilterMode('month');
     setMonthPickerVisible(false);
-  }, []);
-
-  const availableMonths = useMemo(() => {
-    const months: { value: string; label: string }[] = [];
-    const now = new Date();
-    for (let i = 0; i < 12; i++) {
-      const date = new Date(now.getFullYear(), now.getMonth() - i, 1);
-      const value = toMonthKey(date);
-      const label = date.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
-      months.push({ value, label });
-    }
-    return months;
   }, []);
 
   const selectedMonthLabel = useMemo(() => {
@@ -320,56 +309,12 @@ export default function ExpensesScreen() {
         onPress={() => router.push('/expense/add' as any)}
       />
 
-      {/* Month Picker Modal */}
-      <Portal>
-        <Modal
-          visible={monthPickerVisible}
-          onDismiss={() => setMonthPickerVisible(false)}
-          contentContainerStyle={[styles.modal, { backgroundColor: theme.colors.surface }]}>
-          <Text variant="titleLarge" style={{ marginBottom: 16, color: theme.colors.onSurface }}>
-            Select Month
-          </Text>
-          <ScrollView showsVerticalScrollIndicator={false}>
-            {availableMonths.map((month) => (
-              <Pressable
-                key={month.value}
-                onPress={() => handleMonthSelect(month.value)}
-                style={({ pressed }) => [
-                  styles.monthItem,
-                  {
-                    backgroundColor:
-                      month.value === selectedMonth
-                        ? theme.colors.primaryContainer
-                        : pressed
-                        ? theme.colors.surfaceVariant
-                        : 'transparent',
-                  },
-                ]}>
-                <Text
-                  variant="bodyLarge"
-                  style={{
-                    color:
-                      month.value === selectedMonth
-                        ? theme.colors.onPrimaryContainer
-                        : theme.colors.onSurface,
-                  }}>
-                  {month.label}
-                </Text>
-                {month.value === selectedMonth && (
-                  <MaterialCommunityIcons
-                    name="check"
-                    size={20}
-                    color={theme.colors.onPrimaryContainer}
-                  />
-                )}
-              </Pressable>
-            ))}
-          </ScrollView>
-          <Button onPress={() => setMonthPickerVisible(false)} style={{ marginTop: 16 }}>
-            Cancel
-          </Button>
-        </Modal>
-      </Portal>
+      <MonthPickerModal
+        visible={monthPickerVisible}
+        selectedMonth={selectedMonth}
+        onSelect={handleMonthSelect}
+        onDismiss={() => setMonthPickerVisible(false)}
+      />
     </View>
   );
 }
@@ -413,19 +358,5 @@ const styles = StyleSheet.create({
   fab: {
     position: 'absolute',
     right: 16,
-  },
-  modal: {
-    marginHorizontal: 20,
-    padding: 20,
-    borderRadius: 16,
-    maxHeight: '60%',
-    alignSelf: 'center',
-  },
-  monthItem: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 16,
-    borderRadius: 8,
   },
 });

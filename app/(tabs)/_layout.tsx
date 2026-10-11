@@ -42,19 +42,21 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
+        name="insights"
+        options={{
+          title: 'Insights',
+          tabBarIcon: ({ color, size }) => (
+            <MaterialCommunityIcons name="chart-donut" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
         name="settings"
         options={{
           title: 'Settings',
           tabBarIcon: ({ color, size }) => (
             <MaterialCommunityIcons name="cog" size={size} color={color} />
           ),
-        }}
-      />
-      {/* Hide the explore tab from the old template */}
-      <Tabs.Screen
-        name="explore"
-        options={{
-          href: null,
         }}
       />
     </Tabs>

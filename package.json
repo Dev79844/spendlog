@@ -9,7 +9,7 @@
     "ios": "expo run:ios",
     "web": "expo start --web",
     "lint": "expo lint",
-    "test": "for tz in UTC Asia/Kolkata America/New_York; do TZ=$tz node --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/test-csv.mjs || exit 1; done",
+    "test": "for tz in UTC Asia/Kolkata America/New_York; do TZ=$tz node --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/test-csv.mjs && TZ=$tz node --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/test-insights.mjs || exit 1; done",
     "verify-migrations": "node scripts/verify-migrations.mjs"
   },
   "dependencies": {
@@ -23,6 +23,7 @@
     "expo-font": "~57.0.4",
     "expo-haptics": "~57.0.3",
     "expo-image": "~57.0.5",
+    "expo-linear-gradient": "~57.0.2",
     "expo-linking": "~57.0.12",
     "expo-router": "~57.0.25",
     "expo-sharing": "~57.0.22",
@@ -36,11 +37,13 @@
     "react-dom": "19.2.3",
     "react-native": "0.86.3",
     "react-native-gesture-handler": "~2.32.0",
+    "react-native-gifted-charts": "^1.4.81",
     "react-native-keyboard-controller": "1.21.9",
     "react-native-paper": "^5.15.3",
     "react-native-reanimated": "4.5.1",
     "react-native-safe-area-context": "~5.7.0",
     "react-native-screens": "~4.26.0",
+    "react-native-svg": "15.15.4",
     "react-native-web": "~0.21.0",
     "react-native-worklets": "0.10.1",
     "zustand": "^5.0.15"

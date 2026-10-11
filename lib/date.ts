@@ -52,6 +52,22 @@ export function monthKeyToDate(month: string): Date {
   return new Date(year, monthIndex, 1);
 }
 
+// The month key `delta` months after `month` (negative goes back).
+export function shiftMonth(month: string, delta: number): string {
+  const { year, monthIndex } = parseMonthKey(month);
+  return toMonthKey(new Date(year, monthIndex + delta, 1));
+}
+
+// Local [start, end) of each day of the month, in order (index 0 is the 1st).
+export function getMonthDayRanges(month: string): { start: number; end: number }[] {
+  const { year, monthIndex } = parseMonthKey(month);
+  const days = new Date(year, monthIndex + 1, 0).getDate();
+  return Array.from({ length: days }, (_, i) => ({
+    start: new Date(year, monthIndex, i + 1).getTime(),
+    end: new Date(year, monthIndex, i + 2).getTime(),
+  }));
+}
+
 // ---------------------------------------------------------------------------
 // Parsing date and time text into stored values.
 //
