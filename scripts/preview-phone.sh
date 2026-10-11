@@ -88,7 +88,7 @@ start_metro() {
   # Open the preview app on this server once Metro answers.
   (
     for _ in $(seq 120); do
-      if curl -fs "http://localhost:$PORT/status" | grep -q running; then
+      if curl -fs "http://127.0.0.1:$PORT/status" | grep -q running; then
         adb_ shell am start -a android.intent.action.VIEW -d "'$url'" "$PACKAGE" > /dev/null \
           && echo "Opened Spendlog Preview on the phone (or open it and pick http://localhost:$PORT)"
         exit 0
@@ -98,6 +98,9 @@ start_metro() {
   ) &
 
   cd "$dir"
+  # "localhost" resolves to ::1 first on some hosts, but the bundle URLs Metro
+  # hands out (and adb reverse) use 127.0.0.1: make Metro listen on IPv4.
+  export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--dns-result-order=ipv4first"
   APP_VARIANT=preview exec npx expo start --dev-client --localhost --port "$PORT"
 }
 
