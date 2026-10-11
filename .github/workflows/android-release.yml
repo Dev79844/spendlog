@@ -1,7 +1,9 @@
 name: Android release APK
 
 # Pushing a tag vMAJOR.MINOR.PATCH (on a commit that is on main) builds a
-# release APK and publishes it as the GitHub Release for that tag.
+# release APK and publishes it as the GitHub Release for that tag. A manual
+# run builds an existing tag's commit with this file as it is on the branch
+# it was dispatched from, e.g. to rebuild a tag after fixing this workflow.
 on:
   push:
     tags: ['v*']
@@ -11,6 +13,10 @@ on:
         description: Existing tag to build (vMAJOR.MINOR.PATCH)
         required: true
         type: string
+      dry_run:
+        description: Build and verify only; don't publish a release
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -130,18 +136,26 @@ jobs:
 
           certs=$("$build_tools/apksigner" verify --print-certs "$apk")
           echo "$certs"
-          signers=$(grep -c '^Signer #[0-9]* certificate SHA-256 digest:' <<< "$certs" || true)
-          actual=$(grep '^Signer #1 certificate SHA-256 digest:' <<< "$certs" | awk '{print $NF}' || true)
+          # apksigner labels digests by scheme ("V2 Signer: certificate SHA-256
+          # digest: ...") or, with v1 signing, "Signer #1 certificate ...". Every
+          # digest it prints, whatever the label, must be the expected key.
+          digests=$(sed -n 's/^.*[Ss]igner.* certificate SHA-256 digest: *\([0-9a-fA-F]*\)$/\1/p' <<< "$certs" \
+            | tr 'A-F' 'a-f' | sort -u)
           expected=$(tr -d ':' <<< "$EXPECTED_SIGNER_SHA256" | tr 'A-F' 'a-f')
-          if [ "$signers" != 1 ] || [ "$actual" != "$expected" ]; then
-            echo "::error::APK signer is $actual ($signers signers), expected $expected"
+          if [ "$digests" != "$expected" ]; then
+            echo "::error::APK signer SHA-256 is [$(echo $digests)], expected $expected"
             exit 1
           fi
 
           badging=$("$build_tools/aapt2" dump badging "$apk")
-          grep -E '^(package|native-code|application-debuggable)' <<< "$badging" || true
-          if ! grep -q "^package: name='$EXPECTED_PACKAGE' versionCode='$VERSION_CODE' versionName='$VERSION_NAME' " <<< "$badging"; then
-            echo "::error::APK is not $EXPECTED_PACKAGE versionCode $VERSION_CODE versionName $VERSION_NAME"
+          package_line=$(grep -m 1 '^package:' <<< "$badging" || true)
+          echo "$package_line"
+          grep -E '^(native-code|application-debuggable)' <<< "$badging" || true
+          field() { sed -n "s/.* $1='\([^']*\)'.*/\1/p" <<< " $package_line"; }
+          if [ "$(field name)" != "$EXPECTED_PACKAGE" ] \
+            || [ "$(field versionCode)" != "$VERSION_CODE" ] \
+            || [ "$(field versionName)" != "$VERSION_NAME" ]; then
+            echo "::error::APK is $(field name) $(field versionCode) $(field versionName), expected $EXPECTED_PACKAGE $VERSION_CODE $VERSION_NAME"
             exit 1
           fi
           if grep -q '^application-debuggable' <<< "$badging"; then
@@ -155,6 +169,7 @@ jobs:
           echo "size_mb=$(( $(stat -c %s "$out") / 1024 / 1024 ))" >> "$GITHUB_OUTPUT"
 
       - name: Publish GitHub Release
+        if: ${{ !inputs.dry_run }}
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION_CODE: ${{ steps.version.outputs.code }}

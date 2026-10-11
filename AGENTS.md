@@ -24,6 +24,8 @@ git tag vX.Y.Z <commit on main> && git push origin vX.Y.Z
 gh release download vX.Y.Z --pattern '*.apk' && adb install -r spendlog-X.Y.Z.apk
 ```
 
+A tag push runs the workflow file from the tagged commit. To rebuild an existing tag with the workflow from `main` (say, after a CI fix), use `gh workflow run android-release.yml --ref main -f tag=vX.Y.Z`; add `-f dry_run=true` to build and verify without publishing.
+
 The workflow fails unless the APK's signer is the template debug keystore (SHA-256 `FA:C6:17:…:91:03:3B:9C`), because the installed app is signed with it. Never uninstall the app on the phone to update it: it holds the only copy of the data.
 
 ## Layout
