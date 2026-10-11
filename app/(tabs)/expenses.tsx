@@ -12,6 +12,7 @@ import {
     getExpensesPaginated,
     type PaginatedExpenses,
 } from '@/lib/db/expenses';
+import { getCurrentMonth, monthKeyToDate, toDayKey, toMonthKey } from '@/lib/date';
 import { useSettingsStore } from '@/lib/stores/settings-store';
 import type { ExpenseWithCategory } from '@/lib/types';
 
@@ -20,8 +21,9 @@ type FilterMode = 'all' | 'month';
 const PAGE_SIZE = 20;
 
 // Pre-format date section headers
-const formatSectionDate = (dateStr: string): string => {
-  const date = new Date(dateStr + 'T00:00:00');
+const formatSectionDate = (dateMs: number): string => {
+  const date = new Date(dateMs);
+  date.setHours(0, 0, 0, 0);
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
@@ -63,10 +65,7 @@ export default function ExpensesScreen() {
   const [hasMore, setHasMore] = useState(true);
   const [total, setTotal] = useState(0);
   const [filterMode, setFilterMode] = useState<FilterMode>('all');
-  const [selectedMonth, setSelectedMonth] = useState(() => {
-    const now = new Date();
-    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-  });
+  const [selectedMonth, setSelectedMonth] = useState(getCurrentMonth);
   const [monthPickerVisible, setMonthPickerVisible] = useState(false);
 
   const offsetRef = useRef(0);
@@ -133,7 +132,7 @@ export default function ExpensesScreen() {
     const now = new Date();
     for (let i = 0; i < 12; i++) {
       const date = new Date(now.getFullYear(), now.getMonth() - i, 1);
-      const value = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+      const value = toMonthKey(date);
       const label = date.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
       months.push({ value, label });
     }
@@ -141,22 +140,23 @@ export default function ExpensesScreen() {
   }, []);
 
   const selectedMonthLabel = useMemo(() => {
-    const date = new Date(selectedMonth + '-01');
+    const date = monthKeyToDate(selectedMonth);
     return date.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
   }, [selectedMonth]);
 
   // Convert expenses to flat list with section headers
   const listData = useMemo((): ListItem[] => {
     const items: ListItem[] = [];
-    let currentDate = '';
+    let currentDay = '';
 
     expenses.forEach((expense) => {
-      if (expense.date !== currentDate) {
-        currentDate = expense.date;
+      const day = toDayKey(expense.date);
+      if (day !== currentDay) {
+        currentDay = day;
         items.push({
           type: 'header',
-          date: currentDate,
-          title: formatSectionDate(currentDate),
+          date: day,
+          title: formatSectionDate(expense.date),
         });
       }
       items.push({

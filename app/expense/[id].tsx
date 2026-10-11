@@ -11,7 +11,7 @@ import { CategoryPicker } from '@/components/category-picker';
 import { useCategoryStore } from '@/lib/stores/category-store';
 import { useExpenseStore } from '@/lib/stores/expense-store';
 import { getExpenseById } from '@/lib/db/expenses';
-import { formatDate } from '@/lib/db';
+import { toExpenseDay } from '@/lib/date';
 
 export default function EditExpenseScreen() {
   const theme = useTheme();
@@ -37,7 +37,7 @@ export default function EditExpenseScreen() {
         // Prefill the form from the stored expense.
         // eslint-disable-next-line react-hooks/set-state-in-effect
         setAmount(expense.amount);
-        setDate(new Date(expense.date + 'T00:00:00'));
+        setDate(new Date(expense.date));
         setCategoryId(expense.category_id);
         setLocation(expense.location ?? '');
         setDescription(expense.description ?? '');
@@ -66,7 +66,7 @@ export default function EditExpenseScreen() {
     try {
       await updateExpense(parseInt(id), {
         amount,
-        date: formatDate(date),
+        date: toExpenseDay(date),
         category_id: categoryId!,
         location: location.trim() || null,
         description: description.trim() || null,
@@ -167,7 +167,7 @@ export default function EditExpenseScreen() {
             mode="date"
             display={Platform.OS === 'ios' ? 'spinner' : 'default'}
             onChange={handleDateChange}
-            maximumDate={new Date()}
+            maximumDate={new Date(new Date().setHours(23, 59, 59, 999))}
           />
         )}
 

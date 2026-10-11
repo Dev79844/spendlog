@@ -1,3 +1,4 @@
+import { monthKeyToDate } from '@/lib/date';
 import type { CategorySummary } from '@/lib/types';
 import { useSettingsStore } from '@/lib/stores/settings-store';
 import React from 'react';
@@ -14,7 +15,7 @@ export function SummaryCard({ total, categories, month }: SummaryCardProps) {
   const theme = useTheme();
   const formatAmount = useSettingsStore((s) => s.formatAmount);
 
-  const monthName = new Date(month + '-01').toLocaleDateString('en-US', {
+  const monthName = monthKeyToDate(month).toLocaleDateString('en-US', {
     month: 'long',
     year: 'numeric',
   });

@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import type { Expense, ExpenseState, CreateExpenseInput, UpdateExpenseInput } from '../types';
 import * as expenseDb from '../db/expenses';
-import { getCurrentMonth } from '../db';
+import { getCurrentMonth } from '../date';
 
 export const useExpenseStore = create<ExpenseState>((set, get) => ({
   expenses: [],

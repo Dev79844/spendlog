@@ -6,7 +6,8 @@ import type {
   MonthlySummary,
   UpdateExpenseInput,
 } from '../types';
-import { db, getCurrentTimestamp } from './index';
+import { getMonthRange } from '../date';
+import { db } from './index';
 
 const PAGE_SIZE = 20;
 
@@ -58,7 +59,10 @@ export function getExpensesPaginated(
   };
 }
 
+// Month arguments are local 'YYYY-MM' keys; they are turned into a
+// [start, end) range of epoch ms in the device's timezone.
 export function getExpensesByMonth(month: string): ExpenseWithCategory[] {
+  const { start, end } = getMonthRange(month);
   return db.getAllSync<ExpenseWithCategory>(
     `
     SELECT 
@@ -67,10 +71,10 @@ export function getExpensesByMonth(month: string): ExpenseWithCategory[] {
       c.color as category_color
     FROM expenses e
     JOIN categories c ON e.category_id = c.id
-    WHERE e.date LIKE ?
+    WHERE e.date >= ? AND e.date < ?
     ORDER BY e.date DESC, e.created_at DESC
   `,
-    [`${month}%`]
+    [start, end]
   );
 }
 
@@ -79,6 +83,7 @@ export function getExpensesByMonthPaginated(
   limit: number = PAGE_SIZE,
   offset: number = 0
 ): PaginatedExpenses {
+  const { start, end } = getMonthRange(month);
   const data = db.getAllSync<ExpenseWithCategory>(
     `
     SELECT 
@@ -87,16 +92,16 @@ export function getExpensesByMonthPaginated(
       c.color as category_color
     FROM expenses e
     JOIN categories c ON e.category_id = c.id
-    WHERE e.date LIKE ?
+    WHERE e.date >= ? AND e.date < ?
     ORDER BY e.date DESC, e.created_at DESC
     LIMIT ? OFFSET ?
   `,
-    [`${month}%`, limit, offset]
+    [start, end, limit, offset]
   );
 
   const countResult = db.getFirstSync<{ count: number }>(
-    'SELECT COUNT(*) as count FROM expenses WHERE date LIKE ?',
-    [`${month}%`]
+    'SELECT COUNT(*) as count FROM expenses WHERE date >= ? AND date < ?',
+    [start, end]
   );
   const total = countResult?.count ?? 0;
 
@@ -139,7 +144,7 @@ export function getExpenseById(id: number): ExpenseWithCategory | null {
 }
 
 export function createExpense(input: CreateExpenseInput): Expense {
-  const now = getCurrentTimestamp();
+  const now = Date.now();
   const result = db.runSync(
     `INSERT INTO expenses (amount, date, category_id, location, description, metadata, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -160,7 +165,7 @@ export function createExpense(input: CreateExpenseInput): Expense {
 
 export function updateExpense(id: number, input: UpdateExpenseInput): void {
   const updates: string[] = ['updated_at = ?'];
-  const values: (string | number | null)[] = [getCurrentTimestamp()];
+  const values: (string | number | null)[] = [Date.now()];
 
   if (input.amount !== undefined) {
     updates.push('amount = ?');
@@ -196,15 +201,17 @@ export function deleteExpense(id: number): void {
 }
 
 export function getMonthlyTotal(month: string): number {
+  const { start, end } = getMonthRange(month);
   const result = db.getFirstSync<{ total: number | null }>(
-    'SELECT SUM(amount) as total FROM expenses WHERE date LIKE ?',
-    [`${month}%`]
+    'SELECT SUM(amount) as total FROM expenses WHERE date >= ? AND date < ?',
+    [start, end]
   );
   return result?.total ?? 0;
 }
 
 export function getMonthlySummary(month: string): MonthlySummary {
   const total = getMonthlyTotal(month);
+  const { start, end } = getMonthRange(month);
 
   const categories = db.getAllSync<CategorySummary>(
     `
@@ -215,18 +222,18 @@ export function getMonthlySummary(month: string): MonthlySummary {
       COALESCE(SUM(e.amount), 0) as total,
       CASE WHEN ? > 0 THEN ROUND(COALESCE(SUM(e.amount), 0) * 100.0 / ?, 1) ELSE 0 END as percentage
     FROM categories c
-    LEFT JOIN expenses e ON c.id = e.category_id AND e.date LIKE ?
+    LEFT JOIN expenses e ON c.id = e.category_id AND e.date >= ? AND e.date < ?
     WHERE c.is_active = 1
     GROUP BY c.id
     HAVING total > 0
     ORDER BY total DESC
   `,
-    [total, total, `${month}%`]
+    [total, total, start, end]
   );
 
   const countResult = db.getFirstSync<{ count: number }>(
-    'SELECT COUNT(*) as count FROM expenses WHERE date LIKE ?',
-    [`${month}%`]
+    'SELECT COUNT(*) as count FROM expenses WHERE date >= ? AND date < ?',
+    [start, end]
   );
 
   return {

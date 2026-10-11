@@ -1,23 +1,23 @@
-// Database row types
+// Database row types. All dates/times are epoch milliseconds (see lib/date.ts).
 export interface Category {
   id: number;
   name: string;
   color: string | null;
   icon: string | null;
   is_active: number; // SQLite uses 0/1 for booleans
-  created_at: string;
+  created_at: number;
 }
 
 export interface Expense {
   id: number;
   amount: number;
-  date: string; // ISO date string YYYY-MM-DD
+  date: number; // calendar day, stored as local noon (toExpenseDay)
   category_id: number;
   location: string | null;
   description: string | null;
   metadata: string | null; // JSON string
-  created_at: string;
-  updated_at: string;
+  created_at: number;
+  updated_at: number;
 }
 
 // Expense with joined category data
@@ -29,7 +29,7 @@ export interface ExpenseWithCategory extends Expense {
 // Input types for creating/updating
 export interface CreateExpenseInput {
   amount: number;
-  date: string;
+  date: number;
   category_id: number;
   location?: string;
   description?: string;
@@ -38,7 +38,7 @@ export interface CreateExpenseInput {
 
 export interface UpdateExpenseInput {
   amount?: number;
-  date?: string;
+  date?: number;
   category_id?: number;
   location?: string | null;
   description?: string | null;

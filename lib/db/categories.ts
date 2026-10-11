@@ -11,8 +11,8 @@ export function getCategoryById(id: number): Category | null {
 
 export function createCategory(input: CreateCategoryInput): Category {
   const result = db.runSync(
-    'INSERT INTO categories (name, color, icon) VALUES (?, ?, ?)',
-    [input.name, input.color ?? null, input.icon ?? null]
+    'INSERT INTO categories (name, color, icon, created_at) VALUES (?, ?, ?, ?)',
+    [input.name, input.color ?? null, input.icon ?? null, Date.now()]
   );
   
   return db.getFirstSync<Category>('SELECT * FROM categories WHERE id = ?', [result.lastInsertRowId])!;
