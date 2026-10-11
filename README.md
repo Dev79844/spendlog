@@ -38,7 +38,7 @@ A personal expense tracking app built with React Native and Expo. Vibe coded for
    npx expo run:ios
    ```
 
-> **Note:** This app uses native modules (SQLite, DateTimePicker) and won't work in Expo Go. You need a development build.
+> **Note:** All native modules the app uses (SQLite, DateTimePicker, SVG, …) are included in Expo Go for SDK 57, so `npx expo start --go` runs it in Expo Go without a build.
 
 ## Releases
 
@@ -50,15 +50,16 @@ gh release download v1.2.3 --pattern '*.apk'
 adb install -r spendlog-1.2.3.apk   # never uninstall: it would delete your data
 ```
 
-## Preview builds on the phone
+## Hot reload on the phone
 
-To try a branch on an Android phone without touching the installed app or its data, use "Spendlog Preview", a development build with its own package (`com.spendlog.app.preview`) and data. Push to a `preview/**` branch to have CI build it, then:
+Install Expo Go (SDK 57) from the Play Store, connect the phone over USB, and run:
 
 ```bash
-gh run download <run-id> --name spendlog-preview-dev-<sha>
-scripts/preview-phone.sh install spendlog-preview-dev-<sha>.apk
-scripts/preview-phone.sh start <branch>   # Metro on :8082 over USB; keep the phone plugged in
+scripts/dev-phone.sh            # this checkout
+scripts/dev-phone.sh <branch>   # origin/<branch>, in its own worktree
 ```
+
+The project opens in Expo Go and reloads as you save. Expo Go keeps its own data, separate from the installed Spendlog app.
 
 ## Project Structure
 
