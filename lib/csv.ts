@@ -1,18 +1,23 @@
 /**
  * CSV interchange format for expenses and categories.
  *
- * Pure TypeScript with no imports, so it runs under plain Node
- * (`npm test`) as well as in the app. All database access lives in
- * `lib/db/csv.ts`.
+ * Pure TypeScript whose only import is the pure `./date`, so it runs under
+ * plain Node (`npm test`) as well as in the app. All database access lives
+ * in `lib/db/csv.ts`.
  *
  * Format: one UTF-8 file (with BOM), RFC 4180 quoting, CRLF line endings.
  * Every expense is one `expense` row. Every category, including unused and
  * deleted (inactive) ones, is also one `category` row at the end of the file,
  * so the export is a complete backup in a single file the share sheet can send.
- * Export writes dates as `YYYY-MM-DD` and timestamps as ISO 8601 UTC,
- * independent of how the database stores them. Import is lenient about date
- * and time formats (see "Dates and timestamps" below).
+ * The database stores epoch milliseconds (see lib/date.ts). Export converts
+ * them to `YYYY-MM-DD` dates (local calendar day) and ISO 8601 UTC
+ * timestamps, the stable interchange format. Import is lenient about date and
+ * time formats and converts every value back to epoch ms with the same
+ * parsers the schema migration uses, so imported rows are stored exactly like
+ * migrated ones.
  */
+
+import { parseExpenseDay, parseTimestamp, toDayKey } from './date';
 
 export const CSV_COLUMNS = [
   'id',
@@ -32,9 +37,10 @@ export const CSV_COLUMNS = [
 
 export type CsvColumn = (typeof CSV_COLUMNS)[number];
 
+// Epoch ms values as stored in SQLite.
 export interface CsvExportExpense {
   id: number;
-  date: string;
+  date: number;
   amount: number;
   category: string;
   category_color: string | null;
@@ -42,8 +48,8 @@ export interface CsvExportExpense {
   location: string | null;
   description: string | null;
   metadata: string | null;
-  created_at: string | null;
-  updated_at: string | null;
+  created_at: number | null;
+  updated_at: number | null;
 }
 
 export interface CsvExportCategory {
@@ -51,13 +57,15 @@ export interface CsvExportCategory {
   color: string | null;
   icon: string | null;
   is_active: number;
-  created_at: string | null;
+  created_at: number | null;
 }
 
+// Values converted to what the database stores: `date` is local noon of the
+// day (parseExpenseDay), timestamps are epoch ms (null when the cell is empty).
 export interface CsvImportExpense {
   row: number;
   id: number | null;
-  date: string;
+  date: number;
   amount: number;
   category: string;
   category_color: string | null;
@@ -65,8 +73,8 @@ export interface CsvImportExpense {
   location: string | null;
   description: string | null;
   metadata: string | null;
-  created_at: string | null;
-  updated_at: string | null;
+  created_at: number | null;
+  updated_at: number | null;
 }
 
 export interface CsvImportCategory {
@@ -75,7 +83,7 @@ export interface CsvImportCategory {
   color: string | null;
   icon: string | null;
   is_active: number;
-  created_at: string | null;
+  created_at: number | null;
 }
 
 export interface CsvRowError {
@@ -180,99 +188,25 @@ export function parseAmount(value: string): number | null {
 // Dates and timestamps
 //
 // Import is lenient so files from older and newer app versions, and sheets
-// re-saved by a spreadsheet, still load. Accepted, for `date` and the
-// timestamp columns alike:
-//   2026-05-27                    calendar day
-//   2026/05/27                    calendar day
-//   2026-05-27T09:57[:00[.123]]   local time (device timezone)
-//   2026-05-27T09:57:00Z          UTC; also +05:30, +0530, +05 offsets
-//   2026-05-27 09:57:00           UTC (SQLite CURRENT_TIMESTAMP), or with an offset
-//   1779875820                    epoch seconds (10 digits)
-//   1779875820000                 epoch milliseconds (13 digits)
-// `DD/MM/YYYY` and `MM/DD/YYYY` are rejected: the order can't be known safely.
+// re-saved by a spreadsheet, still load. The accepted formats and the parsing
+// live in lib/date.ts (parseExpenseDay / parseTimestamp), shared with the
+// schema migration.
 
 export const ACCEPTED_DATE_FORMATS =
   'YYYY-MM-DD, an ISO 8601 date-time (2026-05-27T09:57:00Z, with an offset like +05:30, or no zone for local time), YYYY-MM-DD HH:MM:SS (UTC), or epoch seconds (10 digits) / milliseconds (13 digits)';
 
-const DATE_TIME_RE =
-  /^(\d{4})[-/](\d{2})[-/](\d{2})(?:([T ])(\d{2}):(\d{2})(?::(\d{2})(?:[.,](\d+))?)?)?\s*(Z|[+-]\d{2}(?::?\d{2})?)?$/i;
 const SLASHED_DMY_RE = /^\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}$/;
 
-/**
- * A parsed date or timestamp: either wall-clock fields in the device's
- * timezone (no zone given) or an exact instant.
- */
-type When =
-  | { kind: 'local'; y: number; mo: number; d: number; h: number; mi: number; s: number; ms: number }
-  | { kind: 'instant'; time: number };
-
-function isValidDay(y: number, mo: number, d: number): boolean {
-  const date = new Date(Date.UTC(y, mo - 1, d));
-  return (
-    y >= 1000 &&
-    date.getUTCFullYear() === y &&
-    date.getUTCMonth() === mo - 1 &&
-    date.getUTCDate() === d
-  );
-}
-
-function parseWhen(value: string): When | null {
-  const v = value.trim();
-  if (/^\d{10}$/.test(v)) return { kind: 'instant', time: Number(v) * 1000 };
-  if (/^\d{13}$/.test(v)) return { kind: 'instant', time: Number(v) };
-
-  const m = DATE_TIME_RE.exec(v);
-  if (!m) return null;
-  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
-  const hasTime = m[4] !== undefined;
-  const [h, mi, s] = [Number(m[5] ?? 0), Number(m[6] ?? 0), Number(m[7] ?? 0)];
-  const ms = Number((m[8] ?? '').slice(0, 3).padEnd(3, '0'));
-  const zone = m[9];
-  if (!isValidDay(y, mo, d) || h > 23 || mi > 59 || s > 59) return null;
-  if (zone && !hasTime) return null;
-
-  if (!zone && m[4] !== ' ') return { kind: 'local', y, mo, d, h, mi, s, ms };
-
-  // A space-separated time without a zone is SQLite's CURRENT_TIMESTAMP: UTC.
-  let offsetMinutes = 0;
-  if (zone && zone.toUpperCase() !== 'Z') {
-    const digits = zone.slice(1).replace(':', '');
-    const oh = Number(digits.slice(0, 2));
-    const om = Number(digits.slice(2) || 0);
-    if (oh > 14 || om > 59) return null;
-    offsetMinutes = (zone[0] === '-' ? -1 : 1) * (oh * 60 + om);
-  }
-  return { kind: 'instant', time: Date.UTC(y, mo - 1, d, h, mi, s, ms) - offsetMinutes * 60_000 };
-}
-
-const pad = (n: number, width = 2) => String(n).padStart(width, '0');
-
-/**
- * Parses a `date` value to the local calendar day `YYYY-MM-DD` (the device's
- * timezone decides which day an instant falls on). Null if unparseable.
- */
+/** A `date` value as the local calendar day `YYYY-MM-DD`. Null if unparseable. */
 export function parseDateValue(value: string): string | null {
-  const when = parseWhen(value);
-  if (!when) return null;
-  if (when.kind === 'local') return `${pad(when.y, 4)}-${pad(when.mo)}-${pad(when.d)}`;
-  const date = new Date(when.time);
-  if (Number.isNaN(date.getTime())) return null;
-  return `${pad(date.getFullYear(), 4)}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  const ms = parseExpenseDay(value);
+  return ms === null ? null : toDayKey(ms);
 }
 
-/**
- * Parses a timestamp value to ISO 8601 UTC. A value without a zone is local
- * time (a bare date is local midnight), except `YYYY-MM-DD HH:MM:SS`, which is
- * SQLite's UTC form. Null if unparseable.
- */
+/** A timestamp value as ISO 8601 UTC. Null if unparseable. */
 export function toIsoTimestamp(value: string): string | null {
-  const when = parseWhen(value);
-  if (!when) return null;
-  const date =
-    when.kind === 'instant'
-      ? new Date(when.time)
-      : new Date(when.y, when.mo - 1, when.d, when.h, when.mi, when.s, when.ms);
-  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+  const ms = parseTimestamp(value);
+  return ms === null ? null : new Date(ms).toISOString();
 }
 
 /** The error for an unparseable date or timestamp in `column`. */
@@ -295,12 +229,12 @@ export function exportFileName(now: Date): string {
  * category (case-insensitive) and description.
  */
 export function expenseDuplicateKey(e: {
-  date: string;
+  date: number;
   amount: number;
   category: string;
   description: string | null;
 }): string {
-  return JSON.stringify([e.date, e.amount, e.category.trim().toLowerCase(), e.description ?? '']);
+  return JSON.stringify([toDayKey(e.date), e.amount, e.category.trim().toLowerCase(), e.description ?? '']);
 }
 
 // ---------------------------------------------------------------------------
@@ -310,13 +244,13 @@ export function buildExportCsv(
   expenses: CsvExportExpense[],
   categories: CsvExportCategory[]
 ): string {
-  const ts = (v: string | null) => (v ? (toIsoTimestamp(v) ?? v) : '');
+  const ts = (v: number | null) => (v === null ? '' : new Date(v).toISOString());
   const rows: string[][] = [[...CSV_COLUMNS]];
 
   for (const e of expenses) {
     const record: Record<CsvColumn, string> = {
       id: String(e.id),
-      date: e.date,
+      date: toDayKey(e.date),
       amount: String(e.amount),
       category: e.category,
       category_color: e.category_color ?? '',
@@ -421,9 +355,9 @@ export function parseImportCsv(text: string): CsvImportResult {
     const timestamp = (c: CsvColumn) => {
       const raw = get(c);
       if (!raw) return null;
-      const iso = toIsoTimestamp(raw);
-      if (!iso) errors.push(dateValueError(c, raw));
-      return iso;
+      const ms = parseTimestamp(raw);
+      if (ms === null) errors.push(dateValueError(c, raw));
+      return ms;
     };
 
     const name = raw('category');
@@ -460,7 +394,7 @@ export function parseImportCsv(text: string): CsvImportResult {
     }
 
     const dateRaw = get('date');
-    const date = parseDateValue(dateRaw);
+    const date = parseExpenseDay(dateRaw);
     if (date === null) errors.push(dateValueError('date', dateRaw));
     const amountRaw = get('amount');
     const amount = parseAmount(amountRaw);

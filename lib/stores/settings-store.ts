@@ -53,14 +53,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   loadSettings: () => {
     try {
-      // Ensure settings table exists
-      db.runSync(`
-        CREATE TABLE IF NOT EXISTS settings (
-          key TEXT PRIMARY KEY,
-          value TEXT NOT NULL
-        )
-      `);
-
+      // The settings table is created by the schema migrations (lib/db/migrations.ts).
       const currencyCode = getSetting('currency');
       const themeMode = getSetting('themeMode') as ThemeMode | null;
 

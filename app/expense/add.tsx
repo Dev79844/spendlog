@@ -10,7 +10,7 @@ import { AmountInput } from '@/components/amount-input';
 import { CategoryPicker } from '@/components/category-picker';
 import { useCategoryStore } from '@/lib/stores/category-store';
 import { useExpenseStore } from '@/lib/stores/expense-store';
-import { formatDate } from '@/lib/db';
+import { toExpenseDay } from '@/lib/date';
 
 export default function AddExpenseScreen() {
   const theme = useTheme();
@@ -49,7 +49,7 @@ export default function AddExpenseScreen() {
     try {
       await addExpense({
         amount,
-        date: formatDate(date),
+        date: toExpenseDay(date),
         category_id: categoryId!,
         location: location.trim() || undefined,
         description: description.trim() || undefined,
@@ -124,7 +124,7 @@ export default function AddExpenseScreen() {
             mode="date"
             display={Platform.OS === 'ios' ? 'spinner' : 'default'}
             onChange={handleDateChange}
-            maximumDate={new Date()}
+            maximumDate={new Date(new Date().setHours(23, 59, 59, 999))}
           />
         )}
 

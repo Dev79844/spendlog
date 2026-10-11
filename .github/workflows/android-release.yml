@@ -168,8 +168,8 @@ jobs:
           echo "path=$out" >> "$GITHUB_OUTPUT"
           echo "size_mb=$(( $(stat -c %s "$out") / 1024 / 1024 ))" >> "$GITHUB_OUTPUT"
 
-      - name: Publish GitHub Release
-        if: ${{ !inputs.dry_run }}
+      # Runs on dry runs too, so a dry run shows the notes it would publish.
+      - name: Write release notes
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION_CODE: ${{ steps.version.outputs.code }}
@@ -178,7 +178,20 @@ jobs:
           APK: ${{ steps.apk.outputs.path }}
           SIZE_MB: ${{ steps.apk.outputs.size_mb }}
         run: |
-          cat > notes.md <<NOTES
+          # Pull requests merged since the previous release. The script is read
+          # from this workflow's own commit, not from the tag checkout: a manual
+          # rebuild runs this file from the dispatched branch, and an older tag's
+          # tree may not have the script. Any failure only drops the list.
+          script="$RUNNER_TEMP/release-pr-list.sh"
+          if git show "$GITHUB_SHA:.github/scripts/release-pr-list.sh" > "$script" \
+            && bash "$script" > pr-list.md; then
+            { cat pr-list.md; echo; } > notes.md
+          else
+            echo "::warning::Could not list the merged pull requests; the release notes have the build info only"
+            : > notes.md
+          fi
+
+          cat >> notes.md <<NOTES
           Release APK for \`$EXPECTED_PACKAGE\`, arm64-v8a only.
 
           | | |
@@ -197,7 +210,15 @@ jobs:
           adb install -r $APK
           \`\`\`
           NOTES
+          cat notes.md
 
+      - name: Publish GitHub Release
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION_NAME: ${{ steps.version.outputs.name }}
+          APK: ${{ steps.apk.outputs.path }}
+        run: |
           # --verify-tag: publish on the pushed tag, never create a new one.
           gh release create "$TAG" "$APK" \
             --verify-tag \

@@ -1,0 +1,2 @@
+# Byte-exact test fixtures (CRLF line endings and BOM, as the app writes them).
+scripts/fixtures/*.csv -text

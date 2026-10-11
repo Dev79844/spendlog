@@ -5,7 +5,8 @@
  * Remember to remove before production!
  */
 
-import { db, getCurrentTimestamp } from './index';
+import { toExpenseDay } from '../date';
+import { db } from './index';
 import { getAllCategories } from './categories';
 
 // Sample data for realistic expenses
@@ -94,10 +95,6 @@ function randomAmount(categoryName: string): number {
   return Math.round(randomInt(range.min, range.max) / 10) * 10;
 }
 
-function formatDate(date: Date): string {
-  return date.toISOString().split('T')[0];
-}
-
 function generateExpenseForCategory(categoryId: number, categoryName: string, date: Date) {
   const templates = EXPENSE_TEMPLATES[categoryName as keyof typeof EXPENSE_TEMPLATES];
   if (!templates) return null;
@@ -108,7 +105,7 @@ function generateExpenseForCategory(categoryId: number, categoryName: string, da
 
   return {
     amount,
-    date: formatDate(date),
+    date: toExpenseDay(date),
     category_id: categoryId,
     location: template.location,
     description,
@@ -126,7 +123,7 @@ export function seedTestData() {
   }
 
   const categoryMap = new Map(categories.map((c) => [c.name, c.id]));
-  const now = getCurrentTimestamp();
+  const now = Date.now();
   let totalExpenses = 0;
 
   // Generate expenses for each month of 2025 (Jan to current month or Dec)

@@ -71,7 +71,7 @@ interface NewCategory {
   color: string | null;
   icon: string | null;
   is_active: number;
-  created_at: string | null;
+  created_at: number | null;
 }
 
 interface CategoryUpdate {
@@ -153,7 +153,7 @@ export function planCsvImport(db: CsvDatabase, parsed: CsvImportResult): CsvImpo
   }
 
   const remaining = new Map<string, number>();
-  const rows = db.getAllSync<{ date: string; amount: number; category: string; description: string | null }>(`
+  const rows = db.getAllSync<{ date: number; amount: number; category: string; description: string | null }>(`
     SELECT e.date, e.amount, COALESCE(c.name, 'Uncategorized') as category, e.description
     FROM expenses e
     LEFT JOIN categories c ON e.category_id = c.id
@@ -185,7 +185,7 @@ export function planCsvImport(db: CsvDatabase, parsed: CsvImportResult): CsvImpo
  * is free, so restoring into a fresh install reproduces the same ids.
  */
 export function applyCsvImport(db: CsvDatabase, plan: CsvImportPlan): void {
-  const now = new Date().toISOString();
+  const now = Date.now();
   db.withTransactionSync(() => {
     for (const c of plan.newCategories) {
       db.runSync(
