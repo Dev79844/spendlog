@@ -1,0 +1,191 @@
+name: Android release APK
+
+# Pushing a tag vMAJOR.MINOR.PATCH (on a commit that is on main) builds a
+# release APK and publishes it as the GitHub Release for that tag.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to build (vMAJOR.MINOR.PATCH)
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+# Publish releases one at a time.
+concurrency:
+  group: android-release
+  cancel-in-progress: false
+
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
+  # SHA-256 of the public React Native/Expo template debug.keystore
+  # (alias androiddebugkey). The installed app is signed with it, so any
+  # other key would make `adb install -r` fail.
+  EXPECTED_SIGNER_SHA256: FA:C6:17:45:DC:09:03:78:6F:B9:ED:E6:2A:96:2B:39:9F:73:48:F0:BB:6F:89:9B:83:32:66:75:91:03:3B:9C
+  EXPECTED_PACKAGE: com.spendlog.app
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ env.TAG }}
+          # Full history, to check that the tag is on main.
+          fetch-depth: 0
+
+      - name: Check tag and derive version
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # versionCode = MAJOR*10000 + MINOR*100 + PATCH. Prints nothing for a
+          # tag that is not a strict vMAJOR.MINOR.PATCH with MINOR, PATCH < 100.
+          version_code() {
+            [[ "$1" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]?)\.(0|[1-9][0-9]?)$ ]] || return 0
+            echo $(( BASH_REMATCH[1] * 10000 + BASH_REMATCH[2] * 100 + BASH_REMATCH[3] ))
+          }
+
+          code=$(version_code "$TAG")
+          if [ -z "$code" ]; then
+            echo "::error::Tag '$TAG' is not vMAJOR.MINOR.PATCH (no leading zeros, MINOR and PATCH < 100)"
+            exit 1
+          fi
+          if [ "$code" -lt 2 ] || [ "$code" -gt 2100000000 ]; then
+            echo "::error::versionCode $code from '$TAG' is outside 2..2100000000"
+            exit 1
+          fi
+
+          commit=$(git rev-parse "refs/tags/$TAG^{commit}")
+          if ! git merge-base --is-ancestor "$commit" origin/main; then
+            echo "::error::Tag '$TAG' ($commit) is not on main"
+            exit 1
+          fi
+
+          # The phone only accepts a higher versionCode, so refuse to publish
+          # one that is not above every published release.
+          published=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1000 \
+            --json tagName,isDraft --jq '.[] | select(.isDraft | not) | .tagName')
+          while read -r other; do
+            other_code=$(version_code "$other")
+            if [ -n "$other_code" ] && [ "$other_code" -ge "$code" ]; then
+              echo "::error::Release $other (versionCode $other_code) is already published; $TAG has versionCode $code"
+              exit 1
+            fi
+          done <<< "$published"
+
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "name=${TAG#v}" >> "$GITHUB_OUTPUT"
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          echo "$TAG: versionName ${TAG#v}, versionCode $code, commit $commit"
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v6
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Set version in app.json
+        env:
+          VERSION_CODE: ${{ steps.version.outputs.code }}
+          VERSION_NAME: ${{ steps.version.outputs.name }}
+        run: |
+          # Only in the CI checkout: prebuild copies both into android/app/build.gradle.
+          jq --arg vn "$VERSION_NAME" --argjson vc "$VERSION_CODE" \
+            '.expo.version = $vn | .expo.android.versionCode = $vc' app.json > app.json.tmp
+          mv app.json.tmp app.json
+
+      - name: Generate android project
+        run: npx expo prebuild --platform android --no-install
+
+      # The prebuild template signs release builds with signingConfigs.debug,
+      # i.e. android/app/debug.keystore; the verify step below enforces it.
+      # arm64-v8a only: the target phone is arm64 and the APK is much smaller.
+      - name: Build release APK (arm64-v8a)
+        working-directory: android
+        run: ./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a
+
+      - name: Verify APK
+        id: apk
+        env:
+          VERSION_CODE: ${{ steps.version.outputs.code }}
+          VERSION_NAME: ${{ steps.version.outputs.name }}
+        run: |
+          apk=android/app/build/outputs/apk/release/app-release.apk
+          build_tools="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -n 1)"
+
+          certs=$("$build_tools/apksigner" verify --print-certs "$apk")
+          echo "$certs"
+          signers=$(grep -c '^Signer #[0-9]* certificate SHA-256 digest:' <<< "$certs" || true)
+          actual=$(grep '^Signer #1 certificate SHA-256 digest:' <<< "$certs" | awk '{print $NF}' || true)
+          expected=$(tr -d ':' <<< "$EXPECTED_SIGNER_SHA256" | tr 'A-F' 'a-f')
+          if [ "$signers" != 1 ] || [ "$actual" != "$expected" ]; then
+            echo "::error::APK signer is $actual ($signers signers), expected $expected"
+            exit 1
+          fi
+
+          badging=$("$build_tools/aapt2" dump badging "$apk")
+          grep -E '^(package|native-code|application-debuggable)' <<< "$badging" || true
+          if ! grep -q "^package: name='$EXPECTED_PACKAGE' versionCode='$VERSION_CODE' versionName='$VERSION_NAME' " <<< "$badging"; then
+            echo "::error::APK is not $EXPECTED_PACKAGE versionCode $VERSION_CODE versionName $VERSION_NAME"
+            exit 1
+          fi
+          if grep -q '^application-debuggable' <<< "$badging"; then
+            echo "::error::APK is debuggable"
+            exit 1
+          fi
+
+          out="spendlog-$VERSION_NAME.apk"
+          cp "$apk" "$out"
+          echo "path=$out" >> "$GITHUB_OUTPUT"
+          echo "size_mb=$(( $(stat -c %s "$out") / 1024 / 1024 ))" >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION_CODE: ${{ steps.version.outputs.code }}
+          VERSION_NAME: ${{ steps.version.outputs.name }}
+          COMMIT: ${{ steps.version.outputs.commit }}
+          APK: ${{ steps.apk.outputs.path }}
+          SIZE_MB: ${{ steps.apk.outputs.size_mb }}
+        run: |
+          cat > notes.md <<NOTES
+          Release APK for \`$EXPECTED_PACKAGE\`, arm64-v8a only.
+
+          | | |
+          | --- | --- |
+          | Commit | $COMMIT |
+          | versionName | $VERSION_NAME |
+          | versionCode | $VERSION_CODE |
+          | Built | $(date -u +%Y-%m-%dT%H:%M:%SZ) |
+          | Signer SHA-256 | \`$EXPECTED_SIGNER_SHA256\` |
+          | Size | ${SIZE_MB} MB |
+
+          Install over the existing app (never uninstall: the app holds the only copy of the data):
+
+          \`\`\`sh
+          gh release download $TAG --repo $GITHUB_REPOSITORY --pattern '*.apk'
+          adb install -r $APK
+          \`\`\`
+          NOTES
+
+          # --verify-tag: publish on the pushed tag, never create a new one.
+          gh release create "$TAG" "$APK" \
+            --verify-tag \
+            --title "Spendlog $VERSION_NAME" \
+            --notes-file notes.md \
+            --latest

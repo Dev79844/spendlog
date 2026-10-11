@@ -15,6 +15,17 @@ Spendlog: an offline-first, single-user expense tracker for Android (primary) an
 
 There are no tests. Check a change with lint plus type-check, and run it on a device when behaviour changes.
 
+## Releases
+
+Pushing a tag `vMAJOR.MINOR.PATCH` (MINOR, PATCH < 100) on a commit already on `main` runs `.github/workflows/android-release.yml`. It builds an arm64-v8a release APK and publishes it as the GitHub Release for that tag, with the asset `spendlog-<version>.apk`. versionName is the tag without the `v`, and versionCode is `MAJOR*10000 + MINOR*100 + PATCH`, which must be higher than every published release. Merging to `main` builds nothing.
+
+```sh
+git tag vX.Y.Z <commit on main> && git push origin vX.Y.Z
+gh release download vX.Y.Z --pattern '*.apk' && adb install -r spendlog-X.Y.Z.apk
+```
+
+The workflow fails unless the APK's signer is the template debug keystore (SHA-256 `FA:C6:17:…:91:03:3B:9C`), because the installed app is signed with it. Never uninstall the app on the phone to update it: it holds the only copy of the data.
+
 ## Layout
 
 - `app/`: expo-router routes. `_layout.tsx` is the root Stack and app bootstrap. `(tabs)/` holds Home (`index`), Expenses, Settings. `expense/` and `category/` each have `add.tsx` and `[id].tsx` (edit), presented as modals; register any new modal route in the root Stack.
