@@ -8,7 +8,8 @@ Spendlog: an offline-first, single-user expense tracker for Android (primary) an
 | --- | --- |
 | Install | `npm install` |
 | Dev build + run | `npm run android` / `npm run ios` (`expo run:*`, native build) |
-| Dev server only | `npm start` (needs a dev build already installed on the device) |
+| Dev server only | `npm start` (for a dev build already installed on the device; `npx expo start --go` for Expo Go) |
+| Hot reload on the phone | `scripts/dev-phone.sh [branch \| dir]` (Expo Go over USB) |
 | Web | `npm run web` (not a supported target: there is no metro config for `expo-sqlite`'s web build) |
 | Lint | `npm run lint` (`expo lint` caches results; add `-- --no-cache` after changing ESLint or its plugins) |
 | Type-check | `npx tsc --noEmit` (no npm script) |
@@ -32,14 +33,13 @@ Release notes list the PRs merged since the previous published release (highest 
 
 The workflow fails unless the APK's signer is the template debug keystore (SHA-256 `FA:C6:17:…:91:03:3B:9C`), because the installed app is signed with it. Never uninstall the app on the phone to update it: it holds the only copy of the data.
 
-## Preview builds on the phone
+## Hot reload on the phone
 
-"Spendlog Preview" (`com.spendlog.app.preview`, scheme `spendlog-preview`) is a development build (expo-dev-client) that installs next to the real app, with its own empty database, and loads JS from Metro on this machine. `app.config.ts` applies it when `APP_VARIANT=preview`; unset, the config is exactly `app.json`, so release builds are unaffected.
+The app runs in Expo Go (SDK 57): every native module it uses on Android ships in Expo Go, so no build is needed to try code on the phone. `expo-dev-client` stays a dependency only because removing it changes the release AndroidManifest (it adds the `exp+spendlog` scheme); with it installed, `expo start` needs `--go` to target Expo Go.
 
-- Build: `.github/workflows/android-preview.yml` runs on pushes to `preview/**` branches (and, once on `main`, `gh workflow run android-preview.yml -f ref=<branch>`), and uploads `spendlog-preview-dev-<sha>.apk` as a workflow artifact. Rebuild only when native modules change; the dev build must contain every native module of the branches it serves.
-- Install: `gh run download <run-id> --name spendlog-preview-dev-<sha>`, then `scripts/preview-phone.sh install <apk>`, which refuses any APK that is not `com.spendlog.app.preview` with the dev launcher (`scripts/apk-info.py` reads the manifest; no aapt2 needed).
-- Serve: `scripts/preview-phone.sh start [branch | dir]` runs Metro on port 8082 (`--localhost`), sets `adb reverse`, and opens the preview app. A branch name gets its own worktree, `../preview-<name>`. The phone must stay on USB.
-- Never install, uninstall, clear or `am start` `com.spendlog.app` for previews. Seed the preview app with Settings → Seed Test Data or a CSV the user chooses to import.
+- `scripts/dev-phone.sh [branch | dir]` runs Metro in Expo Go mode on port 8081 (`--localhost`, IPv4), sets `adb reverse`, and opens `exp://127.0.0.1:8081` in Expo Go (`host.exp.exponent`, from the Play Store). Saved edits hot-reload. A branch name gets its own worktree, `../dev-<name>`. The phone must stay on USB.
+- Expo Go keeps its own data, separate from the real app's; it starts empty (seed it with Settings → Seed Test Data, or import a CSV the user chooses). Never install, uninstall, clear or `am start` `com.spendlog.app` for this.
+- A new native module must be in Expo Go for this SDK (`apps/expo-go/package.json` on expo/expo's `sdk-NN` branch). If one is not, Expo Go can't run the app; discuss a dev build before adding it.
 
 ## Layout
 
@@ -81,7 +81,7 @@ The workflow fails unless the APK's signer is the template debug keystore (SHA-2
 
 ## Gotchas
 
-- `expo-sqlite`, the date picker, and the keyboard controller are native modules: the app does not run in Expo Go. Adding a native dependency means rebuilding with `npm run android` / `ios`, not just restarting Metro.
+- `expo-sqlite`, the date picker, and the keyboard controller are native modules. Expo Go bundles them, but a release or `npm run android` build only picks up a new native dependency after a rebuild, not a Metro restart.
 - **Schema changes** go through `lib/db/migrations.ts`, versioned with `PRAGMA user_version`. Append a migration with the next `version` to `MIGRATIONS`; never edit or reorder one that has shipped, because installs that ran it will not run it again. Each migration runs in its own transaction with the version bump, with foreign keys off; changing a column type means rebuilding the table (create `x_new`, copy, drop, rename, recreate indexes). `initDatabase` copies the DB to `SQLite/spendlog-backup-v<from>-<time>.db` (next to `spendlog.db`) before any pending migration. `migrations.ts` may import only pure modules (`lib/date.ts`) so `npm run verify-migrations` can load it under Node; add sample-data checks there for a new migration. Changing the parsers in `lib/date.ts` also changes what migration 1 does on installs that haven't run it yet. Migrations: 1 `epoch-ms-dates`, 2 `shifted-expense-dates`, 3 `income-and-recurring` (additive: new tables and two columns on `expenses`; a later migration that rebuilds `expenses` must keep `recurring_rule_id`, `occurrence_date` and the unique `idx_expenses_occurrence`). A migration receives a `MigrationContext` (`fromVersion`, and `originalSchemaMigratedAt`, which `initDatabase` reads from the name of the newest `spendlog-backup-v0-*.db`).
 - **Shifted dates**: the pre-1.2 app stored days with `toISOString()`, so some old rows are a day off. That happened in the add screen when it was opened between local midnight and the UTC offset (00:00–05:29 in IST), and on every edit-screen save east of UTC. Migration 2 (`shifted-expense-dates`) moves only rows where exactly one shift fits. It records every row it fixed or doubts in `date_review` (`expense_id`, `expense_created_at`, `reason` `add-shifted`/`add-uncertain`/`edited`, `status` `fixed`/`pending`/`moved`/`kept`/`undone`, `original_date`, `suggested_date`, `resolved_at`). Rows are matched to expenses by id and `created_at`, and drop out of the review once their date changes. CSV import does not apply this fix.
 - The user has real data on their phone: a schema change must preserve it, and app updates are installed over the existing app, never by uninstalling (that wipes the database).
