@@ -14,6 +14,7 @@ import {
 } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { CsvDataSection } from '@/components/csv-data-section';
 import { getCategoryExpenseCount } from '@/lib/db/categories';
 import { seedTestData, clearAllExpenses, getExpenseCount } from '@/lib/db/seed';
 import { useCategoryStore } from '@/lib/stores/category-store';
@@ -244,6 +245,22 @@ export default function SettingsScreen() {
             </View>
           )}
         </View>
+      </View>
+
+      {/* Data Section */}
+      <View style={styles.section}>
+        <Text variant="titleMedium" style={{ color: theme.colors.onBackground, marginBottom: 12 }}>
+          Data
+        </Text>
+        <CsvDataSection
+          onImported={() => {
+            loadCategories();
+            loadExpenses();
+            if (DEV_MODE) {
+              setExpenseCount(getExpenseCount());
+            }
+          }}
+        />
       </View>
 
       {/* Dev Tools Section - Only shown in DEV_MODE */}
