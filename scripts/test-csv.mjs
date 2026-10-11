@@ -27,6 +27,8 @@ const dbCsv = await import('../lib/db/csv.ts');
 const { DEFAULT_CATEGORIES } = await import('../lib/types.ts');
 const { runMigrations, MIGRATIONS } = await import('../lib/db/migrations.ts');
 const { parseExpenseDay, parseTimestamp } = await import('../lib/date.ts');
+const rec = await import('../lib/db/recurring.ts');
+const { toDayKey } = await import('../lib/date.ts');
 const { PRE_MIGRATION_SQL } = await import('./fixtures/pre-migration-db.mjs');
 const PRE_MIGRATION_EXPORT = readFileSync(new URL('./fixtures/pre-migration-export.csv', import.meta.url), 'utf8');
 
@@ -261,7 +263,7 @@ test('export → import into a fresh install reproduces the data', () => {
   const source = sourceDb();
   const exported = dbCsv.buildCsvExport(source);
   assert.equal(exported.expenseCount, 5);
-  assert.equal(exported.categoryCount, 10);
+  assert.equal(exported.categoryCount, 15); // 10 expense + 5 seeded income categories
   assert.ok(exported.csv.startsWith('﻿id,date,amount,category,'));
 
   const target = freshDb();
@@ -402,7 +404,7 @@ test(`export → import of a migrated DB reproduces identical epoch values (TZ=$
   });
   const exported = dbCsv.buildCsvExport(source);
   // Export stays human-readable: local calendar days and ISO UTC timestamps.
-  assert.match(exported.csv, /\r\n2,2025-03-15,120,Food & Dining,.*,2025-03-15T18:50:00\.000Z,2025-03-15T18:50:00\.000Z,expense,\r\n/);
+  assert.match(exported.csv, /\r\n2,2025-03-15,120,Food & Dining,.*,2025-03-15T18:50:00\.000Z,2025-03-15T18:50:00\.000Z,expense,,,,,,,,\r\n/);
 
   const target = freshDb();
   importText(target, exported.csv);
@@ -410,7 +412,196 @@ test(`export → import of a migrated DB reproduces identical epoch values (TZ=$
   assert.deepEqual(rawCategories(target), rawCategories(source));
   // Re-exporting gives the same expense lines (category lines differ only in
   // the seeded defaults' created_at, see rawCategories).
-  const expenseLines = (text) => text.split('\r\n').filter((line) => line.endsWith(',expense,'));
+  const expenseLines = (text) => text.split('\r\n').filter((line) => line.endsWith(',expense,,,,,,,,'));
   assert.equal(expenseLines(exported.csv).length, 10);
   assert.deepEqual(expenseLines(dbCsv.buildCsvExport(target).csv), expenseLines(exported.csv));
+});
+
+// ---------------------------------------------------------------------------
+// Income and recurring rules
+
+const noon = (day) => {
+  const [y, m, d] = day.split('-').map(Number);
+  return new Date(y, m - 1, d, 12).getTime();
+};
+const at = (day) => {
+  const [y, m, d] = day.split('-').map(Number);
+  return new Date(y, m - 1, d, 9);
+};
+
+function addIncome(db, e) {
+  const cat = db.getFirstSync('SELECT id FROM income_categories WHERE name = ?', [e.category]);
+  db.runSync(
+    `INSERT INTO incomes (amount, date, category_id, description, metadata, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [e.amount, parseExpenseDay(e.date), cat.id, e.description ?? null, e.metadata ?? null, 1735725600000, 1735725600000]
+  );
+}
+
+const incomesOf = (db) =>
+  db.getAllSync(
+    `SELECT i.id, i.amount, i.date, c.name as category, i.description, i.metadata, i.recurring_rule_id,
+            i.occurrence_date, i.created_at, i.updated_at
+     FROM incomes i JOIN income_categories c ON c.id = i.category_id ORDER BY i.id`,
+    []
+  );
+const linkedExpensesOf = (db) =>
+  db.getAllSync('SELECT id, recurring_rule_id, occurrence_date FROM expenses ORDER BY id', []);
+const rulesOf = (db) =>
+  rec.getRecurringRules(db).map(({ category_color, ...r }) => r).sort((a, b) => a.id - b.id);
+const incomeCategoriesOf = (db) =>
+  db.getAllSync('SELECT name, color, icon, is_active FROM income_categories ORDER BY name', []);
+
+function ruleInput(db, overrides) {
+  const kind = overrides.kind ?? 'expense';
+  const table = kind === 'income' ? 'income_categories' : 'categories';
+  const { category, ...rest } = overrides;
+  return {
+    kind, amount: 100, location: null, description: null, frequency: 'monthly', interval: 1,
+    start_date: noon('2025-01-31'), end_date: null,
+    category_id: db.getFirstSync(`SELECT id FROM ${table} WHERE name = ?`, [category]).id,
+    ...rest,
+  };
+}
+
+/** sourceDb() plus income, an income category, and rules with generated rows. */
+function sourceWithIncome() {
+  const db = sourceDb();
+  db.runSync("INSERT INTO income_categories (name, color, icon, created_at) VALUES ('Dividends, \"misc\"', '#112233', 'chart-line', 5)", []);
+  db.runSync("UPDATE income_categories SET is_active = 0 WHERE name = 'Interest'", []);
+  addIncome(db, { amount: 2500.5, date: '2025-01-05', category: 'Freelance', description: 'logo, "v2"' });
+  addIncome(db, { amount: 12, date: '2025-02-01', category: 'Dividends, "misc"', metadata: '{"k":1}' });
+  addIncome(db, { amount: 30, date: '2025-02-02', category: 'Interest' });
+  rec.createRecurringRule(db, ruleInput(db, { category: 'Bills & Utilities', amount: 900, description: 'Rent', location: 'Flat 4' }));
+  rec.createRecurringRule(db, ruleInput(db, {
+    kind: 'income', category: 'Salary', amount: 5000, description: 'Salary', start_date: noon('2025-01-01'),
+  }));
+  const gym = rec.createRecurringRule(db, ruleInput(db, {
+    category: 'Healthcare', amount: 15, description: 'Gym', frequency: 'weekly', interval: 2,
+    start_date: noon('2025-02-03'), end_date: noon('2025-03-31'),
+  }));
+  rec.materializeDueOccurrences(db, at('2025-03-15'));
+  rec.setRecurringRuleActive(db, gym.id, false);
+  // A generated row the user edited later: amount and date changed, occurrence kept.
+  db.runSync("UPDATE expenses SET amount = 950, date = ? WHERE description = 'Rent' AND occurrence_date = ?", [
+    noon('2025-03-01'), noon('2025-02-28'),
+  ]);
+  return db;
+}
+
+test('income and recurring rules round-trip through a fresh install', () => {
+  const source = sourceWithIncome();
+  const exported = dbCsv.buildCsvExport(source);
+  assert.equal(exported.incomeCount, 6); // 3 manual + Jan..Mar salary
+  assert.equal(exported.ruleCount, 3);
+  assert.equal(exported.categoryCount, 16);
+  assert.match(exported.csv, /\r\n\d+,2025-03-01,5000,Salary,.*,income,,\d+,2025-03-01,,,,,\r\n/);
+  assert.match(exported.csv, /,"Dividends, ""misc""",#112233,chart-line,.*,income_category,1,/);
+  assert.match(exported.csv, /,Gym,,.*,recurring_expense,,,,weekly,2,2025-03-31,0,2025-03-03\r\n/);
+
+  const target = freshDb();
+  const plan = importText(target, exported.csv);
+  assert.equal(plan.incomes.length, 6);
+  assert.equal(plan.rules.length, 3);
+  assert.deepEqual(plan.newCategories.filter((c) => c.kind === 'income').map((c) => c.name), ['Dividends, "misc"']);
+  assert.deepEqual(plan.categoryUpdates.filter((u) => u.kind === 'income').map((u) => [u.name, u.is_active]), [['Interest', 0]]);
+
+  assert.deepEqual(incomesOf(target), incomesOf(source));
+  assert.deepEqual(expensesOf(target), expensesOf(source));
+  assert.deepEqual(linkedExpensesOf(target), linkedExpensesOf(source));
+  assert.deepEqual(rulesOf(target), rulesOf(source));
+  assert.deepEqual(incomeCategoriesOf(target), incomeCategoriesOf(source));
+  // Expense and income categories stay apart.
+  assert.equal(target.getFirstSync("SELECT COUNT(*) AS n FROM categories WHERE name = 'Salary'", []).n, 0);
+
+  // The cursors came along: a catch-up on the same day adds nothing, and the
+  // restored database exports the same file.
+  assert.equal(rec.materializeDueOccurrences(target, at('2025-03-15')), 0);
+  const lines = (text) => text.split('\r\n').filter((l) => !/,(category|income_category),[01],/.test(l));
+  assert.deepEqual(lines(dbCsv.buildCsvExport(target).csv), lines(exported.csv));
+  // And both keep generating the same rows afterwards.
+  rec.materializeDueOccurrences(source, at('2025-05-01'));
+  rec.materializeDueOccurrences(target, at('2025-05-01'));
+  assert.deepEqual(incomesOf(target).map(({ created_at, updated_at, ...r }) => r),
+    incomesOf(source).map(({ created_at, updated_at, ...r }) => r));
+});
+
+test('re-importing an export with income and rules adds nothing', () => {
+  const source = sourceWithIncome();
+  const plan = importText(source, dbCsv.buildCsvExport(source).csv);
+  assert.equal(plan.incomes.length, 0);
+  assert.equal(plan.expenses.length, 0);
+  assert.equal(plan.rules.length, 0);
+  assert.equal(plan.incomeDuplicates, 6);
+  assert.equal(plan.ruleDuplicates, 3);
+  assert.ok(dbCsv.isEmptyPlan(plan));
+});
+
+test('merging: a known rule is reused, and its occurrences already present are skipped', () => {
+  const source = sourceWithIncome();
+  rec.materializeDueOccurrences(source, at('2025-04-15'));
+  const text = dbCsv.buildCsvExport(source).csv;
+
+  // The target has the same salary rule, generated up to February, and the
+  // February salary was edited (so it no longer matches by amount).
+  const target = freshDb();
+  const salary = rec.createRecurringRule(target, ruleInput(target, {
+    kind: 'income', category: 'Salary', amount: 5000, description: 'Salary', start_date: noon('2025-01-01'),
+  }));
+  rec.materializeDueOccurrences(target, at('2025-02-15'));
+  target.runSync('UPDATE incomes SET amount = 5100 WHERE occurrence_date = ?', [noon('2025-02-01')]);
+
+  const plan = importText(target, text);
+  assert.equal(plan.rules.filter((r) => r.kind === 'income').length, 0);
+  assert.equal(plan.incomeDuplicates, 2); // Jan by value, Feb by rule + occurrence
+  const salaries = target.getAllSync(
+    'SELECT amount, occurrence_date, recurring_rule_id FROM incomes WHERE description = ? ORDER BY date', ['Salary']
+  );
+  assert.deepEqual(salaries.map((r) => [r.amount, toDayKey(r.occurrence_date), r.recurring_rule_id]), [
+    [5000, '2025-01-01', salary.id], [5100, '2025-02-01', salary.id],
+    [5000, '2025-03-01', salary.id], [5000, '2025-04-01', salary.id],
+  ]);
+  // The matched rule's own catch-up finds March and April already there.
+  assert.equal(rec.materializeDueOccurrences(target, at('2025-04-15')), 0);
+  assert.equal(toDayKey(rec.getRecurringRuleById(target, salary.id).last_occurrence), '2025-04-01');
+});
+
+test('hand-made and older files: income rows by record_type, no new columns needed', () => {
+  const db = freshDb();
+  const plan = importText(db, 'Date,Amount,Category,Type\n2025-04-01,300,Refund,income\n2025-04-02,40,Refund,\n');
+  assert.equal(plan.incomes.length, 1);
+  assert.equal(plan.expenses.length, 1);
+  // Same name, different kinds: the income goes to the seeded income category,
+  // the expense creates an expense category.
+  assert.deepEqual(plan.newCategories.map((c) => [c.kind, c.name]), [['expense', 'Refund']]);
+  assert.equal(incomesOf(db)[0].recurring_rule_id, null);
+});
+
+test('rule and income validation errors name the row', () => {
+  const text = [
+    'date,amount,category,record_type,frequency,interval,end_date,rule_active,recurring_rule_id,id',
+    '2025-01-01,10,Rent,recurring_expense,fortnightly,,,,,1',
+    '2025-01-01,10,Rent,recurring_expense,monthly,0,,,,2',
+    '2025-01-31,10,Rent,recurring_expense,monthly,1,2025-01-01,,,3',
+    '2025-01-01,10,Rent,recurring_expense,monthly,1,,maybe,,4',
+    '2025-01-01,10,Rent,recurring_expense,monthly,1,,,,5',
+    '2025-01-01,10,Rent,recurring_expense,monthly,1,,,,5',
+    '2025-01-01,10,Rent,expense,,,,,x,',
+    '2025-01-01,10,Salary,income,,,,,,',
+    '2025-01-01,10,Salary,salary,,,,,,',
+  ].join('\n');
+  const r = csv.parseImportCsv(text);
+  assert.deepEqual(r.errors.map((e) => e.row), [2, 3, 4, 5, 7, 8, 10]);
+  assert.match(r.errors[0].message, /frequency "fortnightly"/);
+  assert.match(r.errors[2].message, /end_date is before/);
+  assert.match(r.errors.at(-1).message, /record_type "salary" must be one of/);
+  assert.equal(r.rules.length, 1);
+  assert.equal(r.incomes.length, 1);
+});
+
+test('a row linked to a rule missing from the file imports unlinked', () => {
+  const r = csv.parseImportCsv('date,amount,category,record_type,recurring_rule_id\n2025-01-01,10,Rent,expense,7\n');
+  assert.deepEqual(r.errors, []);
+  assert.equal(r.expenses[0].recurring_rule_id, null);
+  assert.equal(r.expenses[0].occurrence_date, null);
 });

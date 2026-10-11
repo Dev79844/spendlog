@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { View, StyleSheet, Platform, Pressable, Keyboard, TextInput as RNTextInput } from 'react-native';
-import { Text, Button, TextInput, useTheme } from 'react-native-paper';
-import { useRouter } from 'expo-router';
+import { Text, Button, SegmentedButtons, TextInput, useTheme } from 'react-native-paper';
+import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-controller';
@@ -10,15 +10,21 @@ import { AmountInput } from '@/components/amount-input';
 import { CategoryPicker } from '@/components/category-picker';
 import { useCategoryStore } from '@/lib/stores/category-store';
 import { useExpenseStore } from '@/lib/stores/expense-store';
+import { useIncomeStore } from '@/lib/stores/income-store';
 import { toExpenseDay } from '@/lib/date';
+import type { TransactionKind } from '@/lib/types';
 
 export default function AddExpenseScreen() {
   const theme = useTheme();
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { categories } = useCategoryStore();
+  const params = useLocalSearchParams<{ kind?: string }>();
+  const { categories: expenseCategories, incomeCategories } = useCategoryStore();
   const { addExpense } = useExpenseStore();
+  const { addIncome } = useIncomeStore();
 
+  const [kind, setKind] = useState<TransactionKind>(params.kind === 'income' ? 'income' : 'expense');
+  const categories = kind === 'income' ? incomeCategories : expenseCategories;
   const [amount, setAmount] = useState(0);
   const [date, setDate] = useState(new Date());
   const [categoryId, setCategoryId] = useState<number | null>(null);
@@ -47,16 +53,25 @@ export default function AddExpenseScreen() {
 
     setLoading(true);
     try {
-      await addExpense({
-        amount,
-        date: toExpenseDay(date),
-        category_id: categoryId!,
-        location: location.trim() || undefined,
-        description: description.trim() || undefined,
-      });
+      if (kind === 'income') {
+        await addIncome({
+          amount,
+          date: toExpenseDay(date),
+          category_id: categoryId!,
+          description: description.trim() || undefined,
+        });
+      } else {
+        await addExpense({
+          amount,
+          date: toExpenseDay(date),
+          category_id: categoryId!,
+          location: location.trim() || undefined,
+          description: description.trim() || undefined,
+        });
+      }
       router.back();
     } catch (error) {
-      console.error('Failed to add expense:', error);
+      console.error(`Failed to add ${kind}:`, error);
     } finally {
       setLoading(false);
     }
@@ -81,7 +96,22 @@ export default function AddExpenseScreen() {
       contentContainerStyle={{ paddingBottom: insets.bottom + 20 }}
       keyboardShouldPersistTaps="handled"
       bottomOffset={20}>
+      <Stack.Screen options={{ title: kind === 'income' ? 'Add Income' : 'Add Expense' }} />
       <View style={styles.form}>
+        <SegmentedButtons
+          value={kind}
+          onValueChange={(value) => {
+            setKind(value as TransactionKind);
+            // Category ids belong to one kind.
+            setCategoryId(null);
+          }}
+          buttons={[
+            { value: 'expense', label: 'Expense', icon: 'cash-minus' },
+            { value: 'income', label: 'Income', icon: 'cash-plus' },
+          ]}
+          style={styles.kind}
+        />
+
         <AmountInput
           value={amount}
           onChange={(val) => {
@@ -132,16 +162,41 @@ export default function AddExpenseScreen() {
           categories={categories}
           selectedId={categoryId}
           onSelect={handleCategorySelect}
+          label={kind === 'income' ? 'Source' : 'Category'}
           error={errors.category}
         />
 
-        <TextInput
-          label="Location (optional)"
-          value={location}
-          onChangeText={setLocation}
-          mode="outlined"
-          style={styles.textInput}
-        />
+        <Button
+          mode="text"
+          icon="repeat"
+          compact
+          onPress={() =>
+            // Carry what was typed over to the recurring rule form.
+            router.replace({
+              pathname: '/recurring/add',
+              params: {
+                kind,
+                amount: amount > 0 ? String(amount) : '',
+                categoryId: categoryId ? String(categoryId) : '',
+                description: description.trim(),
+                location: location.trim(),
+                start: String(toExpenseDay(date)),
+              },
+            } as any)
+          }
+          style={styles.repeat}>
+          Make this repeat…
+        </Button>
+
+        {kind === 'expense' && (
+          <TextInput
+            label="Location (optional)"
+            value={location}
+            onChangeText={setLocation}
+            mode="outlined"
+            style={styles.textInput}
+          />
+        )}
 
         <TextInput
           label="Description (optional)"
@@ -181,6 +236,14 @@ const styles = StyleSheet.create({
   },
   form: {
     padding: 16,
+  },
+  kind: {
+    marginBottom: 16,
+  },
+  repeat: {
+    alignSelf: 'flex-start',
+    marginTop: -8,
+    marginBottom: 8,
   },
   field: {
     marginBottom: 16,

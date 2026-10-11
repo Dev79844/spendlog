@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { View, StyleSheet, Platform, Pressable, Alert, Keyboard } from 'react-native';
 import { Text, Button, TextInput, useTheme } from 'react-native-paper';
-import { useRouter, useLocalSearchParams } from 'expo-router';
+import { Stack, useRouter, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-controller';
@@ -10,16 +10,24 @@ import { AmountInput } from '@/components/amount-input';
 import { CategoryPicker } from '@/components/category-picker';
 import { useCategoryStore } from '@/lib/stores/category-store';
 import { useExpenseStore } from '@/lib/stores/expense-store';
+import { useIncomeStore } from '@/lib/stores/income-store';
 import { getExpenseById } from '@/lib/db/expenses';
+import { getIncomeById } from '@/lib/db/incomes';
 import { toExpenseDay } from '@/lib/date';
 
 export default function EditExpenseScreen() {
   const theme = useTheme();
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { id } = useLocalSearchParams<{ id: string }>();
-  const { categories } = useCategoryStore();
+  // `?kind=income` edits an income entry; anything else an expense.
+  const { id, kind: kindParam } = useLocalSearchParams<{ id: string; kind?: string }>();
+  const isIncome = kindParam === 'income';
+  const noun = isIncome ? 'Income' : 'Expense';
+  const { categories: expenseCategories, incomeCategories } = useCategoryStore();
+  const categories = isIncome ? incomeCategories : expenseCategories;
   const { updateExpense, deleteExpense } = useExpenseStore();
+  const { updateIncome, deleteIncome } = useIncomeStore();
+  const [fromRule, setFromRule] = useState(false);
 
   const [amount, setAmount] = useState(0);
   const [date, setDate] = useState(new Date());
@@ -32,18 +40,19 @@ export default function EditExpenseScreen() {
 
   useEffect(() => {
     if (id) {
-      const expense = getExpenseById(parseInt(id));
-      if (expense) {
-        // Prefill the form from the stored expense.
+      const entry = isIncome ? getIncomeById(parseInt(id)) : getExpenseById(parseInt(id));
+      if (entry) {
+        // Prefill the form from the stored entry.
         // eslint-disable-next-line react-hooks/set-state-in-effect
-        setAmount(expense.amount);
-        setDate(new Date(expense.date));
-        setCategoryId(expense.category_id);
-        setLocation(expense.location ?? '');
-        setDescription(expense.description ?? '');
+        setAmount(entry.amount);
+        setDate(new Date(entry.date));
+        setCategoryId(entry.category_id);
+        setLocation((entry as { location?: string | null }).location ?? '');
+        setDescription(entry.description ?? '');
+        setFromRule(entry.recurring_rule_id !== null);
       }
     }
-  }, [id]);
+  }, [id, isIncome]);
 
   const validate = (): boolean => {
     const newErrors: typeof errors = {};
@@ -64,16 +73,25 @@ export default function EditExpenseScreen() {
 
     setLoading(true);
     try {
-      await updateExpense(parseInt(id), {
-        amount,
-        date: toExpenseDay(date),
-        category_id: categoryId!,
-        location: location.trim() || null,
-        description: description.trim() || null,
-      });
+      if (isIncome) {
+        await updateIncome(parseInt(id), {
+          amount,
+          date: toExpenseDay(date),
+          category_id: categoryId!,
+          description: description.trim() || null,
+        });
+      } else {
+        await updateExpense(parseInt(id), {
+          amount,
+          date: toExpenseDay(date),
+          category_id: categoryId!,
+          location: location.trim() || null,
+          description: description.trim() || null,
+        });
+      }
       router.back();
     } catch (error) {
-      console.error('Failed to update expense:', error);
+      console.error(`Failed to update ${noun}:`, error);
     } finally {
       setLoading(false);
     }
@@ -81,8 +99,10 @@ export default function EditExpenseScreen() {
 
   const handleDelete = () => {
     Alert.alert(
-      'Delete Expense',
-      'Are you sure you want to delete this expense?',
+      `Delete ${noun}`,
+      fromRule
+        ? `Delete this ${noun.toLowerCase()}? It was added by a recurring rule; the rule will not add it again.`
+        : `Are you sure you want to delete this ${noun.toLowerCase()}?`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -92,10 +112,11 @@ export default function EditExpenseScreen() {
             if (!id) return;
             setLoading(true);
             try {
-              await deleteExpense(parseInt(id));
+              if (isIncome) await deleteIncome(parseInt(id));
+              else await deleteExpense(parseInt(id));
               router.back();
             } catch (error) {
-              console.error('Failed to delete expense:', error);
+              console.error(`Failed to delete ${noun}:`, error);
             } finally {
               setLoading(false);
             }
@@ -124,7 +145,13 @@ export default function EditExpenseScreen() {
       contentContainerStyle={{ paddingBottom: insets.bottom + 20 }}
       keyboardShouldPersistTaps="handled"
       bottomOffset={20}>
+      <Stack.Screen options={{ title: `Edit ${noun}` }} />
       <View style={styles.form}>
+        {fromRule && (
+          <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant, marginBottom: 12 }}>
+            Added by a recurring rule. Changes here only affect this entry.
+          </Text>
+        )}
         <AmountInput
           value={amount}
           onChange={(val) => {
@@ -175,16 +202,19 @@ export default function EditExpenseScreen() {
           categories={categories}
           selectedId={categoryId}
           onSelect={handleCategorySelect}
+          label={isIncome ? 'Source' : 'Category'}
           error={errors.category}
         />
 
-        <TextInput
-          label="Location (optional)"
-          value={location}
-          onChangeText={setLocation}
-          mode="outlined"
-          style={styles.textInput}
-        />
+        {!isIncome && (
+          <TextInput
+            label="Location (optional)"
+            value={location}
+            onChangeText={setLocation}
+            mode="outlined"
+            style={styles.textInput}
+          />
+        )}
 
         <TextInput
           label="Description (optional)"
@@ -220,7 +250,7 @@ export default function EditExpenseScreen() {
           textColor={theme.colors.error}
           style={[styles.deleteButton, { borderColor: theme.colors.error }]}
           disabled={loading}>
-          Delete Expense
+          Delete {noun}
         </Button>
       </View>
     </KeyboardAwareScrollView>

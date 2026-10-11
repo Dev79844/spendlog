@@ -7,7 +7,7 @@ import { Button, Text, useTheme } from 'react-native-paper';
 
 import { exportFileName, parseImportCsv } from '@/lib/csv';
 import { db } from '@/lib/db';
-import { applyCsvImport, buildCsvExport, planCsvImport } from '@/lib/db/csv';
+import { applyCsvImport, buildCsvExport, isEmptyPlan, planCsvImport } from '@/lib/db/csv';
 
 const MAX_ERRORS_SHOWN = 8;
 
@@ -74,7 +74,7 @@ export function CsvDataSection({ onImported }: CsvDataSectionProps) {
       return;
     }
     const name = exportFileName(new Date());
-    const summary = `${plural(data.expenseCount, 'expense')} and ${plural(data.categoryCount, 'category', 'categories')}.`;
+    const summary = `${plural(data.expenseCount, 'expense')}, ${plural(data.incomeCount, 'income entry', 'income entries')}, ${plural(data.ruleCount, 'recurring rule')} and ${plural(data.categoryCount, 'category', 'categories')}.`;
 
     const buttons: Parameters<typeof Alert.alert>[2] = [{ text: 'Cancel', style: 'cancel' }];
     if (Platform.OS === 'android') {
@@ -115,8 +115,15 @@ export function CsvDataSection({ onImported }: CsvDataSectionProps) {
 
       const plan = planCsvImport(db, parsed);
       const lines = [`${plural(plan.expenses.length, 'expense')} to add`];
-      if (plan.duplicates > 0) {
-        lines.push(`${plural(plan.duplicates, 'expense')} already in Spendlog (skipped)`);
+      if (plan.incomes.length > 0) {
+        lines.push(`${plural(plan.incomes.length, 'income entry', 'income entries')} to add`);
+      }
+      if (plan.rules.length > 0) {
+        lines.push(`${plural(plan.rules.length, 'recurring rule')} to add`);
+      }
+      const skipped = plan.duplicates + plan.incomeDuplicates + plan.ruleDuplicates;
+      if (skipped > 0) {
+        lines.push(`${plural(skipped, 'entry', 'entries')} already in Spendlog (skipped)`);
       }
       if (plan.newCategories.length > 0) {
         lines.push(
@@ -129,18 +136,14 @@ export function CsvDataSection({ onImported }: CsvDataSectionProps) {
         );
       }
 
-      if (
-        plan.expenses.length === 0 &&
-        plan.newCategories.length === 0 &&
-        plan.categoryUpdates.length === 0
-      ) {
+      if (isEmptyPlan(plan)) {
         Alert.alert('Nothing to import', `${asset.name}\n\n${lines.join('\n')}`);
         return;
       }
 
       Alert.alert(
         'Import from CSV',
-        `${asset.name}\n\n• ${lines.join('\n• ')}\n\nNo existing expenses are changed or deleted.`,
+        `${asset.name}\n\n• ${lines.join('\n• ')}\n\nNo existing entries are changed or deleted.`,
         [
           { text: 'Cancel', style: 'cancel' },
           {
@@ -149,7 +152,10 @@ export function CsvDataSection({ onImported }: CsvDataSectionProps) {
               run('import', async () => {
                 applyCsvImport(db, plan);
                 onImported();
-                Alert.alert('Import complete', `Added ${plural(plan.expenses.length, 'expense')}.`);
+                Alert.alert(
+                  'Import complete',
+                  `Added ${plural(plan.expenses.length, 'expense')}, ${plural(plan.incomes.length, 'income entry', 'income entries')} and ${plural(plan.rules.length, 'recurring rule')}.`
+                );
               }),
           },
         ]
@@ -159,7 +165,7 @@ export function CsvDataSection({ onImported }: CsvDataSectionProps) {
   return (
     <View style={[styles.card, { backgroundColor: theme.colors.surface }]}>
       <Text variant="bodyMedium" style={{ color: theme.colors.onSurfaceVariant, marginBottom: 12 }}>
-        Export all expenses and categories to a CSV file, or import one. Files stay on your
+        Export all expenses, income, recurring rules and categories to a CSV file, or import one. Files stay on your
         device unless you send them somewhere.
       </Text>
       <View style={styles.buttons}>

@@ -7,24 +7,42 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ExpenseCard } from '@/components/expense-card';
 import { SummaryCard } from '@/components/summary-card';
 import { getMonthlySummary, getRecentExpenses } from '@/lib/db/expenses';
+import { getMonthlyIncomeTotal, getRecentIncomes } from '@/lib/db/incomes';
 import { useExpenseStore } from '@/lib/stores/expense-store';
+import { useRecurringStore } from '@/lib/stores/recurring-store';
 import { useSettingsStore } from '@/lib/stores/settings-store';
-import type { ExpenseWithCategory, MonthlySummary } from '@/lib/types';
+import type { ExpenseWithCategory, IncomeWithCategory, MonthlySummary } from '@/lib/types';
+
+const RECENT_COUNT = 5;
+
+type RecentItem =
+  | { kind: 'expense'; row: ExpenseWithCategory }
+  | { kind: 'income'; row: IncomeWithCategory };
 
 export default function HomeScreen() {
   const theme = useTheme();
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { currentMonth, loadExpenses } = useExpenseStore();
+  const { currentMonth } = useExpenseStore();
   const formatAmount = useSettingsStore((s) => s.formatAmount);
+  // Changes when recurring entries were generated while this screen is open.
+  const recurringGeneration = useRecurringStore((s) => s.generation);
   const [summary, setSummary] = React.useState<MonthlySummary>({ total: 0, categories: [], expenseCount: 0 });
-  const [recentExpenses, setRecentExpenses] = React.useState<ExpenseWithCategory[]>([]);
+  const [income, setIncome] = React.useState(0);
+  const [recent, setRecent] = React.useState<RecentItem[]>([]);
 
   const loadData = useCallback(() => {
-    const summaryData = getMonthlySummary(currentMonth);
-    setSummary(summaryData);
-    setRecentExpenses(getRecentExpenses(5));
-  }, [currentMonth]);
+    setSummary(getMonthlySummary(currentMonth));
+    setIncome(getMonthlyIncomeTotal(currentMonth));
+    // Newest of both kinds, merged.
+    const items: RecentItem[] = [
+      ...getRecentExpenses(RECENT_COUNT).map((row) => ({ kind: 'expense' as const, row })),
+      ...getRecentIncomes(RECENT_COUNT).map((row) => ({ kind: 'income' as const, row })),
+    ];
+    items.sort((a, b) => b.row.date - a.row.date || b.row.created_at - a.row.created_at);
+    setRecent(items.slice(0, RECENT_COUNT));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentMonth, recurringGeneration]);
 
   useFocusEffect(
     useCallback(() => {
@@ -43,6 +61,7 @@ export default function HomeScreen() {
 
         <SummaryCard
           total={summary.total}
+          income={income}
           categories={summary.categories}
           month={currentMonth}
         />
@@ -51,21 +70,28 @@ export default function HomeScreen() {
           <Text
             variant="titleMedium"
             style={{ color: theme.colors.onBackground, marginHorizontal: 16, marginBottom: 8 }}>
-            Recent Expenses
+            Recent Activity
           </Text>
-          {recentExpenses.length === 0 ? (
+          {recent.length === 0 ? (
             <View style={styles.emptyState}>
               <Text variant="bodyMedium" style={{ color: theme.colors.onSurfaceVariant }}>
                 No expenses yet. Tap + to add one!
               </Text>
             </View>
           ) : (
-            recentExpenses.map((expense) => (
+            recent.map((item) => (
               <ExpenseCard
-                key={expense.id}
-                expense={expense}
-                formattedAmount={formatAmount(expense.amount)}
-                onPress={() => router.push(`/expense/${expense.id}` as any)}
+                key={`${item.kind}-${item.row.id}`}
+                expense={item.row}
+                income={item.kind === 'income'}
+                formattedAmount={formatAmount(item.row.amount)}
+                onPress={() =>
+                  router.push(
+                    (item.kind === 'income'
+                      ? `/expense/${item.row.id}?kind=income`
+                      : `/expense/${item.row.id}`) as any
+                  )
+                }
               />
             ))
           )}
