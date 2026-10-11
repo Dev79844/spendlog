@@ -1,8 +1,8 @@
-import * as SQLite from 'expo-sqlite';
 import { DEFAULT_CATEGORIES } from '../types';
 import { runMigrations } from './migrations';
+import { db, waitForDatabase } from './open';
 
-export const db = SQLite.openDatabaseSync('spendlog.db');
+export { db };
 
 // Copies the database next to itself (the app's document directory, under
 // SQLite/) before migrations touch it. VACUUM INTO writes a consistent copy,
@@ -17,6 +17,7 @@ function backupDatabase(fromVersion: number): void {
 }
 
 export async function initDatabase(): Promise<void> {
+  await waitForDatabase();
   const { fromVersion, toVersion } = runMigrations(db, undefined, { backup: backupDatabase });
   if (fromVersion !== toVersion) {
     console.log(`Database migrated from version ${fromVersion} to ${toVersion}`);
