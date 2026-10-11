@@ -32,6 +32,15 @@ Release notes list the PRs merged since the previous published release (highest 
 
 The workflow fails unless the APK's signer is the template debug keystore (SHA-256 `FA:C6:17:…:91:03:3B:9C`), because the installed app is signed with it. Never uninstall the app on the phone to update it: it holds the only copy of the data.
 
+## Preview builds on the phone
+
+"Spendlog Preview" (`com.spendlog.app.preview`, scheme `spendlog-preview`) is a development build (expo-dev-client) that installs next to the real app, with its own empty database, and loads JS from Metro on this machine. `app.config.ts` applies it when `APP_VARIANT=preview`; unset, the config is exactly `app.json`, so release builds are unaffected.
+
+- Build: `.github/workflows/android-preview.yml` runs on pushes to `preview/**` branches (and, once on `main`, `gh workflow run android-preview.yml -f ref=<branch>`), and uploads `spendlog-preview-dev-<sha>.apk` as a workflow artifact. Rebuild only when native modules change; the dev build must contain every native module of the branches it serves.
+- Install: `gh run download <run-id> --name spendlog-preview-dev-<sha>`, then `scripts/preview-phone.sh install <apk>`, which refuses any APK that is not `com.spendlog.app.preview` with the dev launcher (`scripts/apk-info.py` reads the manifest; no aapt2 needed).
+- Serve: `scripts/preview-phone.sh start [branch | dir]` runs Metro on port 8082 (`--localhost`), sets `adb reverse`, and opens the preview app. A branch name gets its own worktree, `../preview-<name>`. The phone must stay on USB.
+- Never install, uninstall, clear or `am start` `com.spendlog.app` for previews. Seed the preview app with Settings → Seed Test Data or a CSV the user chooses to import.
+
 ## Layout
 
 - `app/`: expo-router routes. `_layout.tsx` is the root Stack and app bootstrap. `(tabs)/` holds Home (`index`), Transactions (`expenses.tsx`, an Expenses/Income segment), Insights, Settings. `expense/` and `category/` each have `add.tsx` and `[id].tsx` (edit), presented as modals; both take `?kind=income` for income entries and income categories. `recurring/` is the rule list (`index`, pushed from Settings) and the add/edit modals. Register any new route in the root Stack.

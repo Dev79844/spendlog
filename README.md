@@ -50,6 +50,16 @@ gh release download v1.2.3 --pattern '*.apk'
 adb install -r spendlog-1.2.3.apk   # never uninstall: it would delete your data
 ```
 
+## Preview builds on the phone
+
+To try a branch on an Android phone without touching the installed app or its data, use "Spendlog Preview", a development build with its own package (`com.spendlog.app.preview`) and data. Push to a `preview/**` branch to have CI build it, then:
+
+```bash
+gh run download <run-id> --name spendlog-preview-dev-<sha>
+scripts/preview-phone.sh install spendlog-preview-dev-<sha>.apk
+scripts/preview-phone.sh start <branch>   # Metro on :8082 over USB; keep the phone plugged in
+```
+
 ## Project Structure
 
 ```
